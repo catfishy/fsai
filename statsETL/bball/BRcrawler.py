@@ -5,8 +5,9 @@ import Queue
 import re
 import math
 from datetime import datetime, timedelta
+from xml.etree import ElementTree as ET
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, element
 import requests
 
 class MultiprocessCrawler(object):
@@ -120,6 +121,18 @@ class Crawler(object):
     @classmethod
     def get_whitelist(cls):
         return cls.WHITELIST
+
+    def convert_html_table_to_dict(self, table):
+        dict_list = []
+        rows = table('tr',recursive=False)
+        header_row = rows[0]
+        headers = [col.string for col in header_row.contents if type(col) == element.Tag]
+        headers = [h.strip() if h else u'' for h in headers]
+        for row in rows[1:]:
+            cols = row('td',recursive=False)
+            values = [col.string for col in cols if type(col) == element.Tag]
+            dict_list.append(dict(zip(headers, values)))
+        return dict_list
 
     def createLogger(self):
         self.logger = logging.getLogger(self.name)
@@ -244,17 +257,21 @@ class teamCrawler(Crawler):
         return True
 
     def crawlTeamPage(self, url, soup):
-        stw_boxes = soup.find_all("div", class_="stw")
+        team_id = url.split('/')[-2].strip()
+        stw_boxes = soup("div", class_="stw")
         stw_box = stw_boxes[0]
         # get first p
-        p_s = stw_box.find_all("p")[0]
-        loc_span = p_s.find_all("span")[0]
-        loc_string = loc_span.next_sibling
-        name_span = p_s.find_all("span")[1]
+        p_s = stw_box("p")[0]
+        loc_span = p_s("span")[0]
+        loc_string = loc_span.next_sibling.strip()
+        name_span = p_s("span")[1]
         name_strings = name_span.next_sibling.split(',')
         recent_name = name_strings[0].strip()
         data = {'location': loc_string,
-                'name': recent_name}
+                'name': recent_name,
+                'team_id': team_id,
+                'url': url}
+        self.logger.info("SAVING: %s" % data)
         return data
 
     def crawlPage(self, url):
@@ -307,7 +324,101 @@ class gameCrawler(Crawler):
         return True
 
     def crawlGamePage(self, url, soup):
-        data = {}
+        game_id = url.split('/')[-1].replace('.html','').strip().upper()
+        page_content = soup.find('div', id="page_content").find('table')
+        all_tables = page_content.find('tr').find('td')
+        all_divs = all_tables('div',recursive=False)
+        boxscore_div = all_divs[0]
+        stats_div = all_divs[1]
+
+        # parse boxscore
+        float_left = boxscore_div.find('div', class_='float_left')
+        box_tables = float_left('table', recursive=False)
+        final_table = box_tables[1].find('tr').find('td').find('table')
+        final_insides = final_table('tr', recursive=False)
+        finalscore_table = final_insides[0]
+        finalscore_table_insides = finalscore_table('td', recursive=False)
+        team1_finalscore = finalscore_table_insides[0]('span')[0].contents
+        team2_finalscore = finalscore_table_insides[1]('span')[0].contents
+        gameinfo_table = final_insides[1].find('td').contents
+        gametime = gameinfo_table[0]
+        gamelocation = gameinfo_table[1].string
+        team_id_regex = re.compile("/[A-Z]+/")
+        team1_id = team_id_regex.search(team1_finalscore[0]['href']).group(0).replace('/','')
+        team2_id = team_id_regex.search(team2_finalscore[0]['href']).group(0).replace('/','')
+        team1_pts = team1_finalscore[1].string
+        team2_pts = team2_finalscore[1].string
+
+        data = {'game_id': game_id,
+                'team1_id': team1_id,
+                'team2_id': team2_id,
+                'team1_pts': team1_pts,
+                'team2_pts': team2_pts,
+                'time': gametime,
+                'location': gamelocation,
+                'url': url}
+
+        teamstat_table = box_tables[2].find('tr')
+        teamstat_insides = teamstat_table('td', recursive=False)
+        scoring_table = teamstat_insides[0].find('table')
+        factors_table = teamstat_insides[1].find('table')
+        # remove first row from scoring table
+        scoring_table('tr')[0].extract()
+        # remove colgroup, unwrap thead and tbody, then remove first row
+        factors_table('colgroup')[0].extract()
+        factors_table.thead.unwrap()
+        factors_table.tbody.unwrap()
+        factors_table('tr')[0].extract()
+
+        scoring_dict = self.convert_html_table_to_dict(scoring_table)
+        factors_dict = self.convert_html_table_to_dict(factors_table)
+        
+        # empty string key is the team id
+        for d in scoring_dict:
+            d['team_id'] = d['']
+            d.pop('')
+        for d in factors_dict:
+            d['team_id'] = d['']
+            d.pop('')
+
+        # TODO: save scoring_dict and factors_dict to respective team/game stat rows
+
+        # parse player stats
+        stats_tables = stats_div('div', class_='table_container')
+        stats_tables_by_id = {tablediv['id'].replace('div_','') : tablediv.table for tablediv in stats_tables}
+        for k,v in stats_tables_by_id.iteritems():
+            # remove colgroup
+            v('colgroup')[0].extract()
+            v.thead.unwrap()
+            v.tbody.unwrap()
+            v('tr')[0].extract()
+            v_dict = [_ for _ in self.convert_html_table_to_dict(v) if _]
+            # replace u'Starters' key with "player_name"
+            for d in v_dict:
+                d['player_name'] = d['Starters']
+                d.pop('Starters')
+            stats_tables_by_id[k] = v_dict
+
+        # TODO: save stats_tables_by_id to respective player/game stat rows
+
+        # parse game info at bottom of page
+        lower_gameinfo_table = stats_div('table', recursive=False)[0]
+        for row in lower_gameinfo_table('tr', recursive=False):
+            title_name = row('td')[0].string.lower().replace(':','')
+            if title_name == 'attendance':
+                data['attendance'] = row('td')[1].string
+            elif title_name == 'time of game':
+                data['time of game'] = row('td')[1].string
+            elif title_name == 'officials':
+                official_links = row('td')[1]('a', recursive=False)
+                official_ids = [l['href'].split('/')[-1].replace('.html','') for l in official_links]
+                data['officials'] = official_ids
+            elif title_name == 'inactive':
+                inactive_links = row('td')[1]('a', recursive=False)
+                inactive_ids = [l['href'].split('/')[-1].replace('.html','') for l in inactive_links]
+                data['inactive'] = inactive_ids
+
+        self.logger.info("SAVING: %s" % data)
         return data
 
 
@@ -353,10 +464,10 @@ class playerCrawler(Crawler):
         if not result:
             return False
         # check info_box
-        info_boxes = soup.find_all(id="info_box")
+        info_boxes = soup(id="info_box")
         if len(info_boxes) > 0:
             info_box = info_boxes[0]
-            spans = info_box.find_all(text=re.compile("Experience\:"))
+            spans = info_box(text=re.compile("Experience\:"))
             if len(spans) > 0:
                 return True
         return False
@@ -364,14 +475,15 @@ class playerCrawler(Crawler):
     def crawlPlayerPage(self, url, soup):
         player_id = url.split('/')[-1].replace('.html','')
         self.logger.info("Crawling PLAYER: %s" % player_id)
-        info_boxes = soup.find_all(id="info_box")
+        info_boxes = soup(id="info_box")
         info_box = info_boxes[0]
-        name_p = info_box.find_all("p", class_="margin_top")[0]
-        full_name = name_p.find_all("span", class_="bold_text")[0].string
-        stat_p = info_box.find_all("p", class_="padding_bottom_half")[0]
-        stat_titles = stat_p.find_all("span", class_="bold_text")
+        name_p = info_box("p", class_="margin_top")[0]
+        full_name = name_p("span", class_="bold_text")[0].string
+        stat_p = info_box("p", class_="padding_bottom_half")[0]
+        stat_titles = stat_p("span", class_="bold_text")
         data = {'player_id': player_id,
-                'full_name': full_name
+                'full_name': full_name,
+                'url': url
                 }
         valid_fields = ['position','shoots','height','weight','born','nba_debut','experience']
         for title_tag in stat_titles:
@@ -379,7 +491,7 @@ class playerCrawler(Crawler):
             title = title.replace(':','').lower().strip()
             if title in valid_fields:
                 if title == 'born':
-                    birth_span = soup.find_all(id="necro-birth")[0]
+                    birth_span = soup(id="necro-birth")[0]
                     text = birth_span['data-birth']
                 elif title == 'nba_debut':
                     date_link = title_tag.next_sibling
@@ -432,7 +544,7 @@ if __name__=="__main__":
     t_crawl = teamCrawler()
 
     #p_crawl.run()
-    #g_crawl.run()
-    t_crawl.run()
+    g_crawl.run()
+    #t_crawl.run()
 
 
