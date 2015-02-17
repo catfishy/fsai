@@ -39,31 +39,60 @@ class upcomingGameCrawler(Crawler):
         live_listings = soup('div', class_='Live GameLine')
         preview_listings = soup('div', class_='Pre GameLine')
         
-        # for preview boxes
         preview_data = []
+
+        # for preview boxes
         for preview in preview_listings:
             prescore_div = preview.find('div', class_="nbaPreMnScore")
             time_div = prescore_div.find('div', class_="nbaPreMnStatus")
             teams_div = prescore_div.find('div', class_="nbaPreMnTeamInfo")
 
             time_parts = [x for x in time_div.stripped_strings]
-            teams_parts = [x for x in teams_div.stripped_strings]
+            teams_images = teams_div('img', title=True)
+            teams_parts = [x['title'] for x in teams_images]
 
-            hourminute = time_parts[0].split(':')
-            ampm = time_parts[1]
-            hour = int(hourminute[0])
-            if 'pm' in ampm:
-                hour += 12
-            minute = int(hourminute[1])
-            gametime = datetime(year=self.date.year, month=self.date.month, day=self.date.day, hour=hour, minute=minute)
-
+            gametime = self.parseTime(time_parts)
             data = {'time': gametime,
-                    'home_team_id': teams_parts[1],
-                    'away_team_id': teams_parts[0]
+                    'home_team_name': teams_parts[1],
+                    'away_team_name': teams_parts[0]
                     }
             preview_data.append(data)
+
+        # for recap boxes
+        for recap in recap_listings:
+            score_div = recap.find('div', class_="nbaModTopScore")
+            time_div = score_div.find('div', class_="nbaFnlStatTxSm")
+            away_team_div = score_div.find('div', class_="nbaModTopTeamAw")
+            home_team_div = score_div.find('div', class_="nbaModTopTeamHm")
+            away_image = away_team_div.find('img', title=True)
+            home_image = home_team_div.find('img', title=True)
+            away_name = away_image['title']
+            home_name = home_image['title']
+
+            time_parts = [x for x in time_div.stripped_strings]
+            time_parts = time_parts[0].split(' ')
+            gametime = self.parseTime(time_parts)
+            data = {'time': gametime,
+                    'home_team_name': home_name,
+                    'away_team_name': away_name
+                    }
+            preview_data.append(data)
+
+        # for live games
+        for live in live_listings:
+            pass
+
         return preview_data
 
+    def parseTime(self, time_parts):
+        hourminute = time_parts[0].split(':')
+        ampm = time_parts[1]
+        hour = int(hourminute[0])
+        if 'pm' in ampm:
+            hour += 12
+        minute = int(hourminute[1])
+        gametime = datetime(year=self.date.year, month=self.date.month, day=self.date.day, hour=hour, minute=minute)
+        return gametime
 
 if __name__=="__main__":
     today = datetime.now() + timedelta(int(1))

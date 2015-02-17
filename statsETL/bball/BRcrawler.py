@@ -288,14 +288,17 @@ class teamCrawler(Crawler):
         recent_name = name_strings[0].strip()
         data = {'location': loc_string,
                 'name': recent_name,
-                '_id': team_id,
                 'url': url}
-
         # FIND ROSTER URL
-        season_table = soup.find('table', id=data['_id'])
+        season_table = soup.find('table', id=team_id)
         roster_url = season_table.find('tbody').find('tr').find('td').find('a')['href']
         roster_url = self.LINK_BASE + roster_url
+        if self.CURRENT_SEASON not in roster_url:
+            self.logger.info("Not a current team")
+            return {}
         self.logger.info("Crawling INTO: %s" % roster_url)
+        # load the id
+        data['_id'] = roster_url.split('/')[-2].strip()
         roster_response = requests.get(roster_url, timeout=10)
         roster_content = roster_response.content
         roster_soup = BeautifulSoup(roster_content)
@@ -305,7 +308,8 @@ class teamCrawler(Crawler):
         for link in roster_rows:
             href = link['href']
             player_id = href.split('/')[-1].strip().replace('.html','')
-            roster_ids.append(player_id)
+            if player_id:
+                roster_ids.append(player_id)
 
         data['players'] = roster_ids
 
@@ -370,6 +374,9 @@ class gameCrawler(Crawler):
         dateblacklist = "index.cgi?month=%s&day=%s&year=%s" % (month,day,year)
         self.BLACKLIST.append(dateblacklist)
 
+        self.upper_limit = now
+        self.lower_limit = None
+
         if days_back:
             now = datetime.now() - timedelta(int(days_back))
             day = now.day
@@ -377,12 +384,7 @@ class gameCrawler(Crawler):
             year = now.year
             dateblacklist = "index.cgi?month=%s&day=%s&year=%s" % (month,day,year)
             self.BLACKLIST.append(dateblacklist)
-            now = datetime.now() - timedelta(int(days_back)+1)
-            day = now.day
-            month = now.month
-            year = now.year
-            dateblacklist = "index.cgi?month=%s&day=%s&year=%s" % (month,day,year)
-            self.BLACKLIST.append(dateblacklist)
+            self.lower_limit = now
 
         self.refresh=refresh
 
@@ -519,6 +521,7 @@ class gameCrawler(Crawler):
         stats_tables_by_id = {tablediv['id'].replace('div_','') : tablediv.table for tablediv in stats_tables}
         player_game_stats = {}
         for k,v in stats_tables_by_id.iteritems():
+            table_team = k.split('_')[0]
             # remove colgroup
             v('colgroup')[0].extract()
             v.thead.unwrap()
@@ -534,6 +537,7 @@ class gameCrawler(Crawler):
                 player_id_link = v.find('a', href=True, text=player_name)['href']
                 player_id = player_id_link.split('/')[-1].replace('.html','')
                 d['player_id'] = player_id
+                d['player_team'] = table_team
                 d.pop('Starters')
                 # convert dnp to 0 mins
                 if d['MP'] == "Did Not Play":
@@ -590,6 +594,20 @@ class gameCrawler(Crawler):
         result = self.nba_conn.findOne(self.game_collection, query=query)
         return bool(result)
 
+    def checkDateLimit(self, url):
+        url_date = url.split('?')[-1]
+        url_date_parts = url_date.split('&')
+        month = int(url_date_parts[0].replace('month=',''))
+        day = int(url_date_parts[1].replace('day=',''))
+        year = int(url_date_parts[2].replace('year=',''))
+        date = datetime(year=year,month=month,day=day)
+        if date > self.upper_limit:
+            return False
+        elif self.lower_limit and date < self.lower_limit:
+            return False
+        else:
+            return True
+
     def crawlPage(self, url):
         '''
         Crawl a page
@@ -599,6 +617,14 @@ class gameCrawler(Crawler):
             self.logger.info("%s already crawled in past, skipping" % url)
             return False
         time.sleep(0.1)
+
+        #"index.cgi?month=%s&day=%s&year=%s"
+        if "index.cgi" in url:
+            in_limit = self.checkDateLimit(url)
+            if not in_limit:
+                self.logger.info("url outside date limit")
+                return False
+
 
         self.url_check_lock.acquire()
         soup = self.checkVisit(url)
@@ -662,11 +688,13 @@ class playerCrawler(Crawler):
         info_boxes = soup(id="info_box")
         info_box = info_boxes[0]
         name_p = info_box("p", class_="margin_top")[0]
+        nickname = info_box('h1')[0].string
         full_name = name_p("span", class_="bold_text")[0].string
         stat_p = info_box("p", class_="padding_bottom_half")[0]
         stat_titles = stat_p("span", class_="bold_text")
         data = {'_id': player_id,
                 'full_name': full_name,
+                'nickname': nickname,
                 'url': url
                 }
         valid_fields = ['position','shoots','height','weight','born','nba debut','experience']
@@ -766,7 +794,7 @@ class playerCrawler(Crawler):
 if __name__=="__main__":
     p_crawl = playerCrawler(refresh=True)
     t_crawl = teamCrawler(refresh=True)
-    g_crawl = gameCrawler(refresh=True, days_back=2)
+    g_crawl = gameCrawler(refresh=True, days_back=101)
     
     #p_crawl.run()
     t_crawl.run()

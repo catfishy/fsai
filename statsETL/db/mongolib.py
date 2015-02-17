@@ -10,6 +10,7 @@ MONGOD_HOST = 'localhost'
 MONGOD_PORT = 27017
 NBA_DB = "nba_db"
 
+
 class MongoConn:
 
     def __init__(self, db=None):
@@ -93,3 +94,13 @@ class MongoConn:
         cursors = coll.parallel_scan(num_cursors)
         return cursors
 
+# get nba db conn
+nba_conn = MongoConn(db=NBA_DB)
+
+# get collections
+team_game_collection = nba_conn.getCollection("team_games")
+player_game_collection = nba_conn.getCollection("player_games")
+game_collection = nba_conn.getCollection("games")
+team_collection = nba_conn.getCollection("teams")
+player_collection = nba_conn.getCollection("players")
+upcoming_collection = nba_conn.getCollection("upcoming")
