@@ -11,7 +11,7 @@ KIMONO_API_KEY = "3GwlWolXpIDwpI5BRyiOqFI2yZT8TCwR"
 KIMONO_API_TOKEN = "cr0OJmo4rEyGZ1PAWOlj3lqstCxwzugV"
 FANDUEL_DRAFT_PAGE_API = "6a0gv9bw"
 
-def fanDuelNBADraftAPIContent():
+def fanDuelNBADraftAPIContent(targeturl):
     """
     Hits the kimono api called 'fanduel nba draft page',
     which returns data in three collections:
@@ -19,7 +19,10 @@ def fanDuelNBADraftAPIContent():
     collection1: available players
     collection2: total salary (get it from somehwere else, THIS WILL CHANGE)
     collection3: roster positions
+
+    TODO: LOCK IT
     """
+    changeFanDuelDraftAPISourceURL(targeturl)
     content = getKimonoAPIContent(FANDUEL_DRAFT_PAGE_API)
     results = content['results']
     #targeturl = content['targeturl'] fix this
@@ -120,6 +123,9 @@ def createFanDuelDraftURL(game_table_id):
 
 
 def changeFanDuelDraftAPISourceURL(new_url):
+    old_url = getKimonoTargetURL(kimono_api_id)
+    if old_url == new_url:
+        return
     response = changeKimonoTargetURL(KIMONO_DRAFT_PAGE_API, new_url)
     return response
 

@@ -33,8 +33,8 @@ def analyzeFanDuelGame(game_id):
     train models or get already trained ones (LOG to ?dynamo?)
     continuously update optimal roster + save to db (LOG UPDATES)
     """
-    # rewrite the target url to kimono fanduel nba api (if necessary), then recrawl
-    kimono_info = fanDuelNBADraftAPIContent()
+    new_url = createFanDuelDraftURL(game_id)
+    kimono_info = fanDuelNBADraftAPIContent(new_url)
     kimono_info = mergeFanduelDB(game_id, kimono_info)
     
     # build players by game lookup
@@ -53,15 +53,15 @@ def analyzeFanDuelGame(game_id):
     # match up game ids with upcoming games
     upcoming_by_id = {} 
     player_teams = {}
-    for game_id in valid_game_ids:
-        teams = game_id.split('@')
+    for gid in valid_game_ids:
+        teams = gid.split('@')
         away = teams[0]
         home = teams[1]
         matched_game = matchUpcomingGame(upcoming_games, home, away)
-        upcoming_by_id[game_id] = matched_game
+        upcoming_by_id[gid] = matched_game
 
         # find players in game
-        game_pids = players_by_game[game_id]
+        game_pids = players_by_game[gid]
         home_name = matched_game['home_team_name']
         away_name = matched_game['away_team_name']
         avai_players = availablePlayers(matched_game)
@@ -87,8 +87,8 @@ def analyzeFanDuelGame(game_id):
             continue
 
         # get matched up
-        game_id = kimono_info['player_games'][pid]
-        matched_game = upcoming_by_id[game_id]
+        gid = kimono_info['player_games'][pid]
+        matched_game = upcoming_by_id[gid]
 
         try:
             # get upcoming game features for player
@@ -110,11 +110,9 @@ def analyzeFanDuelGame(game_id):
         stat_projections[pid] = pproj
     point_projections = getFantasyPoints(stat_projections, kimono_info['point_values'])
 
-    print "invalid: %s" % invalid_players
-    print point_projections
-
     kimono_info['stat_projections'] = stat_projections
     kimono_info['point_projections'] = point_projections
+    kimono_info['invalids'] = invalid_players
 
     # remove invalid players
     for pid in invalid_players:
@@ -122,8 +120,6 @@ def analyzeFanDuelGame(game_id):
         kimono_info['point_projections'].pop(pid, None)
         kimono_info['player_positions'].pop(pid, None)
         kimono_info['player_teams'].pop(pid, None)
-
-    print kimono_info
 
     # create optimal matchup
     optros = FanDuelOptimalRoster(kimono_info['budget'], 
@@ -136,21 +132,57 @@ def analyzeFanDuelGame(game_id):
     kimono_info['optimal_roster'] = optimal
 
     # save matchup info
-    # TODO: CHECK IF ROW EXISTS, AND WHICH INFORMATION IS NEW
-    kimono_info['update_time'] = datetime.now()
-    nba_conn.saveDocument(upcoming_collection, kimono_info)
+    data = prepUpdate(game_id, kimono_info)
+    data['update_time'] = datetime.now()
+    data['_id'] = game_id
+    nba_conn.saveDocument(upcoming_collection, data)
 
+
+def prepUpdate(game_id, kimono_info):
+    '''
+    Pop unnecessary items from kimono_info
+    Check if optimal roster is different, if so, log
+    '''
+    kimono_info.pop('player_teams', None)
+    kimono_info.pop('player_positions', None)
+    kimono_info.pop('player_salaries', None)
+    kimono_info.pop('stat_projections', None)
+    kimono_info.pop('player_games', None)
+    kimono_info.pop("player_dicts", None)
+    kimono_info['update_needed'] = False
+    saved = upcoming_collection.find_one({"_id": game_id})
+    if saved:
+        if saved['players'] != kimono_info['players']:
+            print "%s: updated players: %s" % (game_id, kimono_info['players'])
+        if saved['optimal_roster'] != kimono_info['optimal_roster']:
+            print "%s: updated optimal roster: %s" % (game_id, kimono_info['optimal_roster'])
+            kimono_info['update_needed'] = True
+        if saved['invalids'] != kimono_info['invalids']:
+            print "%s: updated invalids: %s" % (game_id, kimono_info['invalids'])
+        if saved['point_projections'] != kimono_info['point_projections']:
+            print "%s: updated projections: %s" % (game_id, kimono_info['point_projections'])
+    else:
+        print "%s: new players: %s" % (game_id, kimono_info['players'])
+        print "%s: new optimal roster: %s" % (game_id, kimono_info['optimal_roster'])
+        print "%s: new invalids: %s" % (game_id, kimono_info['invalids'])
+        print "%s: new projections: %s" % (game_id, kimono_info['point_projections'])
+    return kimono_info
 
 def mergeFanduelDB(game_id, kimono_info):
     '''
     Merge db row if exists, and augment with static info
     '''
-    kimono_info['point_values'] = {'TOV': -1.0, 
-                                   'AST': 1.5,
-                                   'STL': 2.0,
-                                   'TRB': 1.2,
-                                   'BLK': 2.0,
-                                   'PTS': 1.0}
+    saved = upcoming_collection.find_one({"_id": game_id})
+    if saved:
+        kimono_info['budget'] = saved['budget']
+        kimono_info['point_values'] = saved['point_values']
+    else:
+        kimono_info['point_values'] = {'TOV': -1.0, 
+                                       'AST': 1.5,
+                                       'STL': 2.0,
+                                       'TRB': 1.2,
+                                       'BLK': 2.0,
+                                       'PTS': 1.0}
     return kimono_info
 
 
@@ -259,5 +291,4 @@ def getFantasyPoints(projections, point_vals):
 
 
 if __name__ == "__main__":
-    data = analyzeFanDuelGame(None)
-    print data
+    analyzeFanDuelGame(None)

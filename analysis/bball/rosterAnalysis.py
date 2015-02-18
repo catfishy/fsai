@@ -30,7 +30,10 @@ class OptimalRoster(object):
         self.players_by_position = defaultdict(list)
         for k,v in self.positions.iteritems():
             self.players_by_position[v].append(k)
-        self.players_by_position = dict(self.players_by_position)
+        sorted_by_position = {}
+        for k,v in self.players_by_position.iteritems():
+            sorted_by_position[k] = sorted(v, key=lambda x: self.costs[x])
+        self.players_by_position = sorted_by_position
 
         self.player_teams = player_teams
 
@@ -44,46 +47,83 @@ class OptimalRoster(object):
 
 
     def buildCheapestRoster(self):
-        roster = []
-        spot_counter = Counter(self.spots)
+        '''
+        players by position is already sorted by cheapest
+        '''
         valid_roster = None
-        pos_combos = {}
-        for pos, num in spot_counter.iteritems():
-            avai = self.players_by_position[pos]
-            # create all combinations of num
-            combos = itertools.combinations(avai, num)
-            # get salary sum of combos
-            combo_sals = []
-            for c in combos:
-                sal = sum([self.costs[pid] for pid in c])
-                combo_sals.append((sal, pos, c))
-            # sort
-            combo_sals = sorted(combo_sals, key=lambda x: x[0])
-            pos_combos[pos] = iter(combo_sals)
-        # make roster combos
-        possible_rosters = itertools.product(*pos_combos.values())
-        sorted_rosters = sorted(possible_rosters, key=lambda x : sum([y[0] for y in x]))
-        for roster in sorted_rosters:
-            # flatten into roster
-            total_salary = 0
-            players_by_pos = {}
-            for salary, position, players in roster:
-                players_by_pos[position] = players
-                total_salary += salary
-            flat_roster = []
-            for spot in self.spots:
-                flat_roster.append(players_by_pos[spot].pop())
-            # validate roster
-            valid = self.validateRoster(flat_roster)
-            if valid:
-                valid_roster = valid
+        used = defaultdict(list)
+        temp_roster = []
+        by_costs = {}
+        # build initial roster
+        for i, s in enumerate(self.spots):
+            if s not in by_costs:
+                # build lookup by cost
+                by_cost = defaultdict(list)
+                for pid in self.players_by_position[s]:
+                    pid_cost = self.costs[pid]
+                    by_cost[pid_cost].append(pid)
+                # sort by pts
+                for k,v in by_cost.iteritems():
+                    by_cost[k] = sorted(v, key=lambda x: self.pts[x], reverse=True)
+                by_costs[s] = by_cost
+            else:
+                by_cost = by_costs[s]
+            for least in sorted(by_cost.keys()):
+                chosen = False
+                for sub_pid in by_cost[least]:
+                    if sub_pid not in used[s]:
+                        used[s].append(sub_pid)
+                        temp_roster.append((sub_pid, self.costs[sub_pid], self.pts[sub_pid]))
+                        chosen = True
+                        break
+                if chosen:
+                    break
+        while valid_roster is None:
+            # check if valid
+            if self.validateRoster(temp_roster):
+                valid_roster = temp_roster
                 break
+            # choose possible changes by cheapest, then by most pts
+            # get cheapest keys
+            keyset = set()
+            for s in set(self.spots):
+                for key in by_costs[s]:
+                    keyset.add(key)
+            cheapest_key = min(keyset)
+
+            # get subs that are that cost
+            subs = defaultdict(list)
+            for s in set(self.spots):
+                if cheapest_key in by_costs[s]:
+                    subs[s] = by_costs[s][cheapest_key]
+
+            # choose sub with most points
+            best_subs = []
+            for s,pids in subs.iteritems():
+                for pid in pids:
+                    if pid not in used[s]:
+                        best_subs.append((s,pid))
+                        break
+            best_sub = sorted(best_subs, key=lambda x: x[1], reverse=True)[0]
+
+            # sub in best_sub switching out one with lowest price, breaking ties by lowest pts
+            pos_players = [(i, self.costs[temp_roster[i]], self.pts[temp_roster[i]]) for i,s in enumerate(self.spots) if s == best_sub[0]]
+            lowest_cost = min([x[1] for x in pos_players])
+            lowest_cost_players = sorted([player for player in pos_players if player[1] == lowest_cost], key=lambda x:x[2])
+            to_sub = lowest_cost_players[0]
+            # sub them out
+            sub_pid = best_sub[1]
+            temp_roster[to_sub[0]] = (sub_pid, self.costs[sub_pid], self.pts[sub_pid])
         # return valid roster
         total_cost = sum([x[1] for x in valid_roster])
         total_pts = sum(x[2] for x in valid_roster)
         return (valid_roster, total_cost, total_pts)
 
     def constructOptimal(self):
+        '''
+        Necessary for projected points to not be similar, doesn't break ties intelligently
+        '''
+        print "budget: %s" % self.budget
         # build cheapest roster possible, splitting ties by maximizing pts
         current_roster, min_cost, current_pts = self.buildCheapestRoster()
         print "cheapest: %s" % current_roster
@@ -91,43 +131,51 @@ class OptimalRoster(object):
         # start looping
         current_cost = min_cost + 1
         while current_cost <= self.budget:
-            print current_cost
             # default best roster is the closest budget roster (no replacements)
-            best_points, best_roster = optimals[max(optimals.keys())]
-            sorted_keys = sorted(optimals.keys(),reverse=True)
+            best_points = None
+            best_roster = None
+            sorted_keys = sorted(optimals.keys(), reverse=True)
             for last_cost in sorted_keys:
+                if optimals[last_cost] == None:
+                    continue
                 last_pts, last_roster = optimals[last_cost]
                 avai_subs = self.findAvailableSubs(last_roster, current_cost-last_cost)
                 if len(avai_subs) == 0:
                     continue
-                for sub_index, sub_pid in self.rankSubs(last_roster, avai_subs):
+                for sub_index, sub_pid in avai_subs:
                     # make the substitution and check if its the current best roster
                     new_roster = copy.deepcopy(last_roster)
                     new_roster[sub_index] = (sub_pid, self.costs[sub_pid], self.pts[sub_pid])
-                    # validate
+                    # validate new roster
                     valid = self.validateRoster(new_roster)
                     if not valid:
                         continue
-                    new_points = sum([x[2] for x in new_roster])
+                    # get best sub
                     new_cost = sum([x[1] for x in new_roster])
+                    new_points = sum([x[2] for x in new_roster])
                     if new_cost != current_cost:
-                        raise Exception("Something went wrong")
-                    if new_points > best_points:
+                        raise Exception("Something went wrong %s != %s" % (new_cost, current_cost))
+                    if not best_roster or new_points > best_points:
                         best_points = new_points
                         best_roster = new_roster
-            optimals[current_cost] = (best_points, best_roster)
+            if best_roster:
+                optimals[current_cost] = (best_points, best_roster)
             current_cost += 1
-        return optimals[self.budget][1]
+        srtd_pts = sorted([(k,v[0],v[1]) for k,v in optimals.iteritems()], key=lambda x: x[1], reverse=True)
+        top_roster = srtd_pts[0]
+        print "best: %s" % (top_roster,)
+        return top_roster[2] # return just the roster
 
     def findAvailableSubs(self, roster, budget_increase):
-        avai_subs = defaultdict(list)
+        avai_subs = []
         for pos, pids in self.players_by_position.iteritems():
             chosen = [(i,x) for i, x in enumerate(roster) if self.spots[i] == pos]
             chosen_costs = [(i, x[1]) for i, x in chosen]
+            chosen_pids = [x[0] for i, x in chosen]
             possible_replacement_costs = [(i, x + budget_increase) for i, x in chosen_costs]
             for pid in pids:
                 new_cost = self.costs[pid]
-                if pid in [_[0] for _ in chosen]:
+                if pid in chosen_pids:
                     # already in roster
                     continue
                 for i, possible_replacement_cost in possible_replacement_costs:
@@ -137,18 +185,8 @@ class OptimalRoster(object):
                         # actually gives us lower points, ignore it
                         continue
                     # found a replacement with the right cost + higher pts
-                    avai_subs[pos].append((i, pid))
-        return dict(avai_subs)
-
-    def rankSubs(self, roster, avai_subs):
-        def rank_key(x):
-            i, sub_id = x
-            old_player_pts = roster[i][2]
-            new_player_pts = self.pts[sub_id]
-            diff = new_player_pts - old_player_pts
-            return diff
-        ranked = sorted(avai_subs, key=rank_key, reverse=True)
-        return ranked
+                    avai_subs.append((i, pid))
+        return avai_subs
 
 
 class FanDuelOptimalRoster(OptimalRoster):
@@ -189,6 +227,5 @@ if __name__ == "__main__":
 
     optros = FanDuelOptimalRoster(budget,salaries,point_projections,player_positions,player_teams,roster_positions)
     optimal = optros.constructOptimal()
-    print optimal
 
 
