@@ -33,7 +33,7 @@ class MongoConn:
 
     def saveDocument(self, coll, doc):
         '''
-        updates if doc found, else inserts
+        overwrites doc if found
         '''
         doc_id = coll.save(doc)
         return doc_id
@@ -103,4 +103,5 @@ player_game_collection = nba_conn.getCollection("player_games")
 game_collection = nba_conn.getCollection("games")
 team_collection = nba_conn.getCollection("teams")
 player_collection = nba_conn.getCollection("players")
-upcoming_collection = nba_conn.getCollection("upcoming")
+upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
+future_collection = nba_conn.getCollection("future") # for future nba games

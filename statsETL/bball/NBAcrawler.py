@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from statsETL.bball.BRcrawler import Crawler
-
+from statsETL.db.mongolib import *
 
 class upcomingGameCrawler(Crawler):
 
@@ -81,6 +81,20 @@ class upcomingGameCrawler(Crawler):
         # for live games
         for live in live_listings:
             pass
+
+        # save into future games db
+        for d in preview_data:
+            home_row = team_collection.find_one({"name":str(d['home_team_name']).strip()})
+            away_row = team_collection.find_one({"name":str(d['away_team_name']).strip()})
+            home_id = home_row['_id']
+            away_id = away_row['_id']
+            teams = [home_id, away_id]
+            new_id = "%s@%s" % (away_id, home_id)
+            d['_id'] = new_id
+            d['teams'] = teams
+            d['home_id'] = home_id
+            d['away_id'] = away_id
+            nba_conn.saveDocument(future_collection, d)
 
         return preview_data
 

@@ -242,8 +242,6 @@ class Crawler(object):
         raise NotImplementedError()
 
 
-#TODO: crawl team rosters!!!
-
 class teamCrawler(Crawler):
 
     INIT_PAGE = "http://www.basketball-reference.com/teams/"
@@ -311,7 +309,7 @@ class teamCrawler(Crawler):
             if player_id:
                 roster_ids.append(player_id)
 
-        data['players'] = roster_ids
+        #data['players'] = roster_ids
 
         self.logger.info("SAVING: %s" % data)
         self.nba_conn.saveDocument(self.team_collection, data)
@@ -541,6 +539,8 @@ class gameCrawler(Crawler):
                 d.pop('Starters')
                 # convert dnp to 0 mins
                 if d['MP'] == "Did Not Play":
+                    d['MP'] = 0.0
+                elif d['MP'] == "Player Suspended":
                     d['MP'] = 0.0
                 else:
                     minutessecs = d['MP'].split(':')
@@ -794,10 +794,10 @@ class playerCrawler(Crawler):
 if __name__=="__main__":
     p_crawl = playerCrawler(refresh=True)
     t_crawl = teamCrawler(refresh=True)
-    g_crawl = gameCrawler(refresh=True, days_back=101)
+    g_crawl = gameCrawler(refresh=True, days_back=10)
     
     #p_crawl.run()
-    t_crawl.run()
-    #g_crawl.run()
+    #t_crawl.run()
+    g_crawl.run()
 
 
