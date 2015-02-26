@@ -27,6 +27,10 @@ class OptimalRoster(object):
         self.pts = player_pts
         self.positions = player_positions
 
+        # round all the pts
+        for k,v in self.pts.iteritems():
+            self.pts[k] = int(v)
+
         self.players_by_position = defaultdict(list)
         for k,v in self.positions.iteritems():
             self.players_by_position[v].append(k)
@@ -41,9 +45,74 @@ class OptimalRoster(object):
             raise Exception("Must specify roster spots")
         else:
             self.spots = roster_spots
+            self.spots_uniq = list(set(self.spots))
 
     def validateRoster(self, roster):
         raise Exception("Roster validation function not implemented")
+
+
+    def constructOptimalByPoints(self):
+        print "budget: %s" % self.budget
+        current_pts = 1
+        empty_roster = [None for _ in self.spots]
+        optimals = {0:(0, [empty_roster])} # {pts: (salary, [rosters...])]}
+        while current_pts <= 400:
+            print "current pts: %s" % current_pts
+            best_rosters = defaultdict(list) # keyed by cost, values are list of rosters that meet that cost
+            sorted_keys = sorted(optimals.keys(), reverse=True)
+            for last_pts in sorted_keys:
+                if optimals[last_pts] == None:
+                    continue
+                last_salary, last_rosters = optimals[last_pts]
+                avai_subs = []
+                pts_margin = current_pts - last_pts
+                subs = {}
+                for i, roster in enumerate(last_rosters):
+                    avai_subs = self.findAvailableSubsByPts(roster, pts_margin)
+                    subs[i] = avai_subs
+                for i, roster_subs in subs.iteritems():
+                    for sub_index, sub_pid in roster_subs:
+                        new_roster = copy.deepcopy(last_rosters[i])
+                        new_roster[sub_index] = (sub_pid, self.costs[sub_pid], self.pts[sub_pid])
+                        # validate new roster
+                        valid = self.validateRoster(new_roster)
+                        if not valid:
+                            continue
+                        # get best sub
+                        new_cost = sum([x[1] for x in new_roster if x])
+                        new_points = sum([x[2] for x in new_roster if x])
+                        if new_points != current_pts:
+                            raise Exception("Something went wrong %s != %s" % (new_points, current_pts))
+                        best_rosters[new_cost].append(new_roster)
+            # find the cheapest
+            if len(best_rosters) == 0:
+                print "none"
+                optimals[current_pts] = None
+            else:
+                min_cost = min(best_rosters.keys())
+                min_rosters = best_rosters[min_cost]
+                # remove duplicates
+                seen_rosters = set()
+                to_delete = []
+                for i,roster in enumerate(min_rosters):
+                    players = sorted([_[0].strip().lower() for _ in roster if _])
+                    players_key = ','.join(players)
+                    if players_key in seen_rosters:
+                        to_delete.append(i)
+                    else:
+                        seen_rosters.add(players_key)
+                for i in sorted(to_delete,reverse=True):
+                    min_rosters.pop(i)
+                optimals[current_pts] = (min_cost, min_rosters)
+                print optimals[current_pts]
+            current_pts += 1
+        # find the rosters that meet the salary cap
+        under_cap = [(k,v) for k,v in optimals.iteritems() if v is not None and v[0] <= self.budget]
+        sorted_under_cap = sorted(under_cap, key=lambda x: x[0], reverse=True)
+        for x in sorted_under_cap[:5]:
+            print x
+        top_rosters = [v[1] for k,v in sorted_under_cap[:5]]
+        return top_rosters
 
     def constructOptimal(self):
         print "budget: %s" % self.budget
@@ -55,7 +124,7 @@ class OptimalRoster(object):
         while current_cost <= self.budget:
             print "current: %s" % current_cost
             best_points = None
-            best_roster = None
+            best_rosters = None
             sorted_keys = sorted(optimals.keys(), reverse=True)
             for last_cost in sorted_keys:
                 if optimals[last_cost] == None:
@@ -85,7 +154,6 @@ class OptimalRoster(object):
                 optimals[current_cost] = (best_points, best_roster)
             else:
                 optimals[current_cost] = None
-            print optimals[current_cost]
             current_cost += 1
         srtd_pts = sorted([(k,v[0],v[1]) for k,v in optimals.iteritems() if v], key=lambda x: x[1], reverse=True)
         # return top five rosters
@@ -114,6 +182,32 @@ class OptimalRoster(object):
                     avai_subs.append((i, pid))
         return avai_subs
 
+    def findAvailableSubsByPts(self, roster, pts_margin):
+        avai_subs = []
+        for pos, pids in self.players_by_position.iteritems():
+            chosen = [(i,x) for i,x in enumerate(roster) if self.spots[i] == pos]
+            chosen_pts = [(i, x[2]) if x else (i, 0) for i, x in chosen]
+            chosen_pids = [x[0] if x else None for i, x in chosen]
+            possible_replacement_pts = [(i, x + pts_margin) for i, x in chosen_pts]
+            for pid in pids:
+                new_pts = self.pts[pid]
+                if pid in chosen_pids:
+                    # already in roster
+                    continue
+                for i, possible_replacement_pt in possible_replacement_pts:
+                    if new_pts == possible_replacement_pt:
+                        avai_subs.append((i, pid))
+        none_replacements = set()
+        to_del = []
+        for x,(i,pid) in enumerate(avai_subs):
+            if roster[i] is None:
+                if pid in none_replacements:
+                    to_del.append(x)
+                else:
+                    none_replacements.add(pid)
+        for i in sorted(to_del, reverse=True):
+            avai_subs.pop(i)
+        return avai_subs
 
 class FanDuelOptimalRoster(OptimalRoster):
 
@@ -152,8 +246,8 @@ if __name__ == "__main__":
     point_projections = {u'bairsca01': 3.23925, u'jacksre01': 22.158500000000004, u'bonnema01': 8.276250000000001, u'smithis01': 5.8315, u'roberan03': 9.868500000000001, u'millemi01': 3.8699999999999997, u'jefferi01': 15.00325, u'jamesle01': 45.002, u'mohamna01': 5.9094999999999995, u'crawfja01': 21.451, u'paulch01': 39.644499999999994, u'davisgl01': 4.418749999999999, u'jonesja02': 4.05275, u'mcderdo01': 3.9265000000000003, u'redicjj01': 16.581, u'mooreet01': 6.391, u'duranke01': 39.7915, u'ellismo01': 35.671749999999996, u'villach01': 14.184750000000001, u'thomptr01': 22.81875, u'collini01': 8.35825, u'parsoch01': 24.80225, u'jonesda02': 2.0340000000000003, u'ledori01': 0.041000000000000036, u'riverau01': 16.52925, u'poweldw01': 5.315250000000001, u'jonespe01': 8.31275, u'haywobr01': 4.80575, u'nowitdi01': 29.383000000000003, u'harride01': 16.464, u'morroan01': 13.668249999999999, u'mozgoti01': 23.338, u'shumpim01': 13.95825, u'westbru01': 48.108, u'smithgr02': 6.900499999999999, u'perkike01': 11.65775, u'turkohe01': 5.9295, u'gasolpa01': 39.955, u'splitti01': 16.34425, u'lambje01': 7.21825, u'wilcocj01': 2.245, u'mariosh01': 11.7645, u'barnema02': 20.0045, u'udohek01': 4.132, u'brookaa01': 16.05775, u'duncati01': 27.4725, u'jerregr01': 3.582, u'josepco01': 12.53675, u'diawbo01': 20.53225, u'pendeje02': 7.785, u'hawessp01': 18.548000000000002, u'belinma01': 12.132749999999998, u'greenda02': 26.46325, u'jordade01': 37.76325, u'bareajo01': 13.40475, u'waitedi01': 18.652749999999997, u'dellama01': 12.846999999999998, u'smithjr01': 22.136000000000003, u'ginobma01': 25.86525, u'irvinky01': 33.061499999999995, u'baynear01': 7.724749999999999, u'dunlemi02': 18.00275, u'rosede01': 28.6145, u'millspa02': 17.418, u'snellto01': 11.31125, u'feltora01': 5.88275, u'aminual01': 16.67525, u'leonaka01': 33.792500000000004, u'mirotni01': 11.697, u'gibsota01': 22.95275, u'noahjo01': 27.093500000000006, u'parketo01': 21.714}
 
 
-    optros = FanDuelOptimalRoster(budget,salaries,point_projections,player_positions,player_teams,roster_positions)
-    optimal = optros.constructOptimal()
+    optros = FanDuelOptimalRoster(budget,salaries,point_projections,[],player_positions,player_teams,roster_positions)
+    optimal = optros.constructOptimalByPoints()
     for o in optimal:
         print o
 

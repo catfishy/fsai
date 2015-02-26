@@ -134,7 +134,7 @@ class featureExtractor(object):
         cat_labels = [item for sublist in cat_labels for item in sublist]
 
         # features splits
-        cat_feat_splits = [len(opp_team_keys), len(loc_keys), len(bb_keys)]
+        cat_feat_splits = [len(opp_team.keys()), len(opp_loc.keys()), len(bb.keys())]
 
         return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
@@ -207,7 +207,6 @@ class featureExtractor(object):
 
         # features splits
         cat_feat_splits = []
-
         return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
     def run(self):
@@ -271,7 +270,7 @@ class featureExtractor(object):
         cat_labels = [item for sublist in cat_labels for item in sublist]
 
         # features splits
-        cat_feat_splits = [len(opp_team_keys), len(loc_keys), len(bb_keys)]
+        cat_feat_splits = [len(opp_team.keys()), len(opp_loc.keys()), len(bb.keys())]
 
         return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
@@ -375,12 +374,13 @@ class featureExtractor(object):
                                                   limit=10)
             results = list(results)
         if len(results) < 3:
-            raise Exception("Could not find more than 3 prior games for player")
+            raise Exception("Could not find more than 3 prior games for player %s" % self.pid)
         trajectories = {k:[] for k in self.PLAYER_STATS}
         for stat in results:
             for k in self.PLAYER_STATS:
                 trajectories[k].append(stat.get(k))
         # average out the stats
+        # TODO: WEIGH MORE RECENT EVERYWHERE
         for k,v in trajectories.iteritems():
             trajectories[k] = np.mean(np.mean([x for x in v if x is not None]))
         return trajectories
@@ -398,9 +398,8 @@ class featureExtractor(object):
             else:
                 opp_team = team1_id
             # grab most recent 3-10 games for the team
-            results = team_game_collection.find({"team_id": opp_team}, 
-                                                  sort=[("game_time",-1)], 
-                                                  limit=10)
+            query = {"team_id": opp_team}
+            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
             results = list(results)
         else:
             if self.player_team == self.target_game_info['team1_id']:
@@ -409,13 +408,11 @@ class featureExtractor(object):
                 opp_team = self.target_game_info['team1_id']
             # grab the most recent 3-10 games for the player leading up to the target game
             target_game_time = self.target_game_info["time"]
-            results = team_game_collection.find({"team_id": opp_team,
-                                                 "game_time": {"$lt": target_game_time}}, 
-                                                 sort=[("game_time",-1)], 
-                                                 limit=10)
+            query = {"team_id": opp_team, "game_time": {"$lt": target_game_time}}
+            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
             results = list(results)
         if len(results) < 3:
-            raise Exception("Could not find more than 3 prior games for team %s" % opp_team)
+            raise Exception("Could not find more than 3 prior games for team: %s" % query)
         # use game ids for allowed stats
         game_ids = [x['game_id'] for x in results]
         # calculate allowed stats
@@ -465,9 +462,8 @@ class featureExtractor(object):
             else:
                 opp_team = team1_id
             # grab most recent 3-10 games for the team
-            results = team_game_collection.find({"team_id": opp_team}, 
-                                                  sort=[("game_time",-1)], 
-                                                  limit=10)
+            query = {"team_id": opp_team}
+            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
             results = list(results)
         else:
             if self.player_team == self.target_game_info['team1_id']:
@@ -476,13 +472,11 @@ class featureExtractor(object):
                 opp_team = self.target_game_info['team1_id']
             # grab the most recent 3-10 games for the team leading up to the target game
             target_game_time = self.target_game_info["time"]
-            results = team_game_collection.find({"team_id": opp_team,
-                                                 "game_time": {"$lt": target_game_time}}, 
-                                                 sort=[("game_time",-1)], 
-                                                 limit=10)
+            query = {"team_id": opp_team, "game_time": {"$lt": target_game_time}}
+            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
             results = list(results)
         if len(results) < 3:
-            raise Exception("Could not find more than 3 prior games for team")
+            raise Exception("Could not find more than 3 prior games for team: %s" % query)
 
         # use game ids for allowed stats
         game_ids = [x['game_id'] for x in results]

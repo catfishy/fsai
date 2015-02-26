@@ -15,7 +15,7 @@ FANDUEL_DRAFT_PAGE_API = "6a0gv9bw"
 NBA_ROSTER_URLS_API = "apxs63v4"
 NBA_ROSTER_API = "26djfnzm"
 
-def fanDuelNBADraftAPIContent(targeturl):
+def fanDuelNBADraftAPIContent(targeturl, crawl=True):
     """
     Hits the kimono api called 'fanduel nba draft page',
     which returns data in three collections:
@@ -27,7 +27,7 @@ def fanDuelNBADraftAPIContent(targeturl):
     """
     # TODO: lock from here
     changed = changeKimonoTargetURL(FANDUEL_DRAFT_PAGE_API, targeturl)
-    results = crawlAndGetContent(FANDUEL_DRAFT_PAGE_API, crawl=False)
+    results = crawlAndGetContent(FANDUEL_DRAFT_PAGE_API, crawl=crawl)
     # to here
 
     game_table_id = parseFanDuelDraftURL(targeturl)
@@ -107,43 +107,6 @@ def fanDuelNBADraftAPIContent(targeturl):
     return data
 
 
-def updateNBARosters():
-    """
-    get all the nba roster urls,
-    then crawl for the roster
-    """
-    results = crawlAndGetContent(NBA_ROSTER_URLS_API)
-    if not results:
-        return
-    results = results['collection1']
-    roster_urls = {}
-    for info_dict in results:
-        data = info_dict['team_roster_urls']
-        team_name = data['text']
-        team_roster_url = data['href']
-        roster_urls[team_name] = team_roster_url
-    for name, url in roster_urls.iteritems():
-        # find team 
-        team_row = team_collection.find_one({"name":str(name).strip()})
-        if not team_row:
-            raise Exception("Could not find %s" % name)
-        changed = changeKimonoTargetURL(NBA_ROSTER_API, url)
-        results = crawlAndGetContent(NBA_ROSTER_API)
-        if not results:
-            continue
-        results = results['collection1']
-        player_names = []
-        for playerdict in results:
-            data = playerdict['players']
-            pname = data['text']
-            player_names.append(pname)
-        player_dicts = translatePlayerNames(player_names)
-        player_ids = [v["_id"] for k,v in player_dicts.iteritems()]
-        team_row['players'] = player_ids
-        # save
-        team_collection.save(team_row)
-        print "Saved %s roster: %s" % (name, player_ids)
-        time.sleep(3)
 
 
 def translatePlayerNames(player_list):
@@ -219,6 +182,17 @@ def changeKimonoTargetURL(kimono_api_id, new_url):
         raise Exception(response.content)
     return response
 
+def setKimonoTargetURLS(kimono_api_id, urls):
+    post_data = {"apikey" : KIMONO_API_KEY,
+                 "urls" : urls}
+    path = "/%s/update" % (kimono_api_id)
+    url = KIMONO_URL_ROOT + path
+    print url
+    response = requests.post(url, post_data)
+    if response.status_code != 200:
+        raise Exception(response.content)
+    return response
+
 def startKimonoCrawl(kimono_api_id):
     path = "/%s/startcrawl" % kimono_api_id
     post_data = {"apikey" : KIMONO_API_KEY}
@@ -231,13 +205,16 @@ def startKimonoCrawl(kimono_api_id):
         raise Exception(response.content)
     return response
 
-def crawlAndGetContent(kimono_api_id, crawl=True):
+def crawlAndGetContent(kimono_api_id, crawl=True, retries=3):
+    print "Hitting %s, crawl: %s" % (kimono_api_id, crawl)
     if crawl:
-        try:
-            crawled = startKimonoCrawl(kimono_api_id)
-        except Exception as e:
-            print "Failed crawl: %s" % e
-            return
+        for retry in range(retries):
+            try:
+                crawled = startKimonoCrawl(kimono_api_id)
+                break
+            except Exception as e:
+                print "Failed crawl: %s" % e
+            raise Exception("Failed after %s retries" % retries)
     api = getKimonoAPIContent(kimono_api_id)
     while api["lastrunstatus"] != "success":
         time.sleep(1)

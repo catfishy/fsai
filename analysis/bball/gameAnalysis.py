@@ -17,6 +17,8 @@ from collections import defaultdict
 from datetime import datetime
 import numpy as np
 import traceback
+import multiprocessing as mp
+import Queue
 
 from statsETL.bball.NBAcrawler import upcomingGameCrawler
 from statsETL.db.mongolib import *
@@ -25,8 +27,15 @@ from analysis.bball.playerAnalysis import featureExtractor, findAllTrainingGames
 from analysis.bball.rosterAnalysis import FanDuelOptimalRoster
 from analysis.util.kimono import *
 
+FANDUEL_PT_VALUES = {'TOV': -1.0, 
+                     'AST': 1.5,
+                     'STL': 2.0,
+                     'TRB': 1.2,
+                     'BLK': 2.0,
+                     'PTS': 1.0}
 
-def analyzeFanDuelGame(game_id, window_size=15):
+
+def analyzeFanDuelGame(game_id, crawl=True, window_size=15):
     """
     create new game row in db
     create kimono api, continuously update scraped values (LOG)
@@ -37,7 +46,7 @@ def analyzeFanDuelGame(game_id, window_size=15):
 
     print new_url
 
-    kimono_info = fanDuelNBADraftAPIContent(new_url)
+    kimono_info = fanDuelNBADraftAPIContent(new_url, crawl=crawl)
     kimono_info = mergeFanduelDB(game_id, kimono_info)
     
     # build players by game lookup
@@ -88,38 +97,36 @@ def analyzeFanDuelGame(game_id, window_size=15):
                 invalid_players.append(p)
     kimono_info['player_teams'] = player_teams
 
+    print "Invalids from Crawl: %s, %s" % (len(invalid_players), invalid_players)
+
     # train model for players and make predictions
-    stat_projections = {}
+    process_inputs = []
     for pid in kimono_info['players']:
         # skip invalid players
         if pid in invalid_players:
-            print "%s is invalid, skipping" % pid
             continue
-
         # get the matched game
         gid = kimono_info['player_games'][pid]
         matched_game = upcoming_by_id[gid]
+        process_inputs.append((pid, matched_game))
 
-        # get upcoming game features for player
-        upcoming_features = getUpcomingGameFeatures(pid, matched_game)
+    # train and project players in parallel
+    poolsize = 4
+    args = iter(process_inputs)
+    pool = mp.Pool(poolsize)
+    pool_results = pool.imap_unordered(trainAndProjectPlayer, args)
+    pool.close()
+    pool.join()
 
-        # train player models
-        try:
-            player_models = trainModelsForPlayer(pid)
-        except Exception as e:
-            print "Error training models for %s: %s" % (pid, e)
-            traceback.print_exc()
+    # get results
+    stat_projections = {}
+    for pid,pid_results in pool_results:
+        if pid_results is None:
             invalid_players.append(pid)
-            continue
+        else:
+            stat_projections[pid] = pid_results
 
-        # make projections
-        pproj = {}
-        for y_key, (core_processors, core_models, trend_processors, trend_models) in player_models.iteritems():
-            mean, variance = makeProjection(upcoming_features, core_processors, core_models, trend_processors, trend_models)
-            pproj[y_key] = (mean, variance)
-        print pproj
-        stat_projections[pid] = pproj
-
+    print "%s players projected, %s invalid" % (len(stat_projections), len(invalid_players))
     point_projections, point_variances = getFantasyPoints(stat_projections, kimono_info['point_values'])
 
     kimono_info['stat_projections'] = stat_projections
@@ -127,7 +134,7 @@ def analyzeFanDuelGame(game_id, window_size=15):
     kimono_info['point_variances'] = point_variances
     kimono_info['invalids'] = invalid_players
 
-    # remove invalid players
+    # remove invalid players from roster construction
     for pid in invalid_players:
         kimono_info['player_salaries'].pop(pid, None)
         kimono_info['point_projections'].pop(pid, None)
@@ -144,7 +151,7 @@ def analyzeFanDuelGame(game_id, window_size=15):
                            kimono_info['player_teams'],
                            kimono_info['roster_positions'])
 
-    optimal = optros.constructOptimal()
+    optimal = optros.constructOptimalByPoints()
     for i,opt in enumerate(optimal):
         # just get players
         only_players = [_[0] for _ in opt]
@@ -157,6 +164,79 @@ def analyzeFanDuelGame(game_id, window_size=15):
     data['targeturl'] = new_url
     nba_conn.saveDocument(upcoming_collection, data)
 
+def compareActualGameStats(pid, game_id, point_values=None):
+    if point_values is None:
+        point_values = FANDUEL_PT_VALUES
+    game_row = game_collection.find_one({"_id": game_id})
+    if not game_row:
+        raise Exception("Could not find game %s" % game_id)
+    playerstats = player_game_collection.find_one({"player_id": pid, "game_id": game_id})
+    if not playerstats:
+        raise Exception("Could not find player %s stats for game %s" % (pid, game_id))
+
+    # now train model and compare results
+    # recreate matched game
+    home_id = game_row['team2_id']
+    away_id = game_row['team1_id']
+    home_row = team_collection.find_one({"_id": home_id})
+    away_row = team_collection.find_one({"_id": away_id})
+    if not home_row:
+        raise Exception("Could not find %s" % home_id)
+    if not away_row:
+        raise Exception("Could not find %s" % away_id)
+    home_name = home_row['name']
+    away_name = away_row['name']
+    matched_game = {"_id" : "%s@%s" % (away_id,home_id),
+                    "away_id" : away_id,
+                    "home_team_name" : home_name,
+                    "teams" : [away_id, home_id],
+                    "home_id" : home_id,
+                    "away_team_name" : away_name,
+                    "time" : game_row['time']
+                    }
+    pid, pproj = trainAndProjectPlayer((pid, matched_game))
+    
+    # calculate player fantasy points
+    actual_pts = 0.0
+    proj_pts = 0.0
+    for k,w in point_values.iteritems():
+        actual_stat_val = float(playerstats.get(k,0.0))
+        actual_pts += w*actual_stat_val
+        mean, var = pproj[k]
+        proj_pts += w*float(mean)
+
+    actual_stats = {'fantasy': actual_pts}
+    for k in pproj.keys():
+        actual_stats[k] = playerstats[k]
+    pproj['fantasy'] = proj_pts
+
+    return (pproj, actual_stats)
+
+def trainAndProjectPlayer(args):
+    """
+    args must be a tuple of (pid, matched_game, output_queue)
+    """
+    pid, matched_game = args
+    # get upcoming game features for player
+    upcoming_features = getUpcomingGameFeatures(pid, matched_game)
+
+    # train player models
+    try:
+        player_models = trainModelsForPlayer(pid)
+    except Exception as e:
+        print "Error training models for %s: %s" % (pid, e)
+        traceback.print_exc()
+        return (pid,None)
+
+    # make projections
+    pproj = {}
+    for y_key, (core_processors, core_models, trend_processors, trend_models) in player_models.iteritems():
+        mean, variance = makeProjection(upcoming_features, core_processors, core_models, trend_processors, trend_models)
+        pproj[y_key] = (mean, variance)
+
+    print "%s: %s" % (pid, pproj)
+    return (pid, pproj)
+
 
 def makeProjection(new_features, core_processors, core_models, trend_processors, trend_models):
     '''
@@ -168,6 +248,9 @@ def makeProjection(new_features, core_processors, core_models, trend_processors,
     W := 1/Var(M)
     Z = C(W*M)
     Var(Z) = Var(C)[(W^2)Var(M)]
+
+
+    TODO: cut off gaussian projections at 0 and recalculate mean/var ??
     '''
     core_projections = {}
     trend_projections = {}
@@ -175,8 +258,9 @@ def makeProjection(new_features, core_processors, core_models, trend_processors,
     for name, model in core_models.iteritems():
         cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = new_features[name]
         proc = core_processors[name]
-        new_sample = proc.transform(cont_features, cat_features)
-        mean, variance = model.predict(np.array([new_sample]))
+        #print "transforming: %s" % (zip(cont_labels,cont_features),)
+        new_sample = np.array([proc.transform(cont_features, cat_features)])
+        mean, variance = model.predict(new_sample)
         mean = max(0.0, mean[0][0])
         variance = max(0.0, variance[0][0])
         core_projections[name] = (mean, variance)
@@ -184,36 +268,40 @@ def makeProjection(new_features, core_processors, core_models, trend_processors,
     for name, model in trend_models.iteritems():
         cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = new_features[name]
         proc = trend_processors[name]
-        new_sample = proc.transform(cont_features, cat_features)
-        mean, variance = model.predict(np.array([new_sample]))
+        new_sample = [proc.transform(cont_features, cat_features)]
+        mean, variance = model.predict(np.array(new_sample))
         mean = max(0.0,mean[0][0])
         variance = max(0.0, variance[0][0])
         trend_projections[name] = (mean, variance)
     # modulate core by each trend projection
     # DEFAULTING TO USING PLAYER FEATURES AS CORE
     core_mean, core_var = core_projections['plf']
-    projections = {}
-    for name, (trend_mean, trend_var) in trend_projections.iteritems():
-        # Var(XY) = (E(X)^2)*(Var(Y)) + (E(Y)^2)*(Var(X)) + Var(X)*Var(Y)
-        new_var = (trend_mean**2)*(core_var) + (core_mean**2)*(trend_var) + (trend_var*core_var)
-        projections[name] = (trend_mean*core_mean,new_var)
-    
+
     # mix projections together, weighted by variance
     mods = trend_projections.values()
     mod_means = np.array([_[0] for _ in mods])
-    mod_vars = np.array([_[1] for _ in mods])
+    mod_vars = np.array([_[1] for _ in mods]) 
+    # deal with zeros
+    zero_replace = 0.00001
+    non_zero_vars = mod_vars[mod_vars > 0.0]
+    if len(non_zero_vars) > 0:
+        zero_replace = min(zero_replace, min(non_zero_vars))
+    mod_vars[mod_vars == 0.0] = zero_replace
 
+    #print "core_mean: %s, core_var: %s" % (core_mean,core_var)
+    #print "modmeans: %s, modvars: %s" % (mod_means, mod_vars)
 
     mod_weights = np.array([1.0/_ for _ in mod_vars])
     mod_weights = mod_weights / sum(mod_weights)
     weighted_mods_avg = np.average(mod_means, weights=mod_weights)
-    print "core: %s, mod: %s" % (core_mean,weighted_mods_avg)
     avg = weighted_mods_avg * core_mean
+    print "core: %s, mod: %s, avg: %s" % (core_mean,weighted_mods_avg,avg)
 
     # calculate Var(Z)
     w_2 = [_**2 for _ in mod_weights]
     mod_variance = np.inner(w_2,mod_vars)
     mod_variance_avg = ((1.0/len(mod_vars))**2) * mod_variance
+    # Var(XY) = (E(X)^2)*(Var(Y)) + (E(Y)^2)*(Var(X)) + Var(X)*Var(Y)
     total_variance = (core_mean**2)*(mod_variance_avg) + (weighted_mods_avg**2)*(core_var) + (mod_variance_avg*core_var)
 
     return (avg,total_variance)
@@ -271,12 +359,7 @@ def mergeFanduelDB(game_id, kimono_info):
     else:
         kimono_info['manual_invalids'] = []
         kimono_info['manual_valids'] = []
-    kimono_info['point_values'] = {'TOV': -1.0, 
-                                   'AST': 1.5,
-                                   'STL': 2.0,
-                                   'TRB': 1.2,
-                                   'BLK': 2.0,
-                                   'PTS': 1.0}
+    kimono_info['point_values'] = FANDUEL_PT_VALUES
     return kimono_info
 
 
@@ -288,7 +371,8 @@ def matchUpcomingGame(home_abbr, away_abbr):
                     }
     home_abbr = translations.get(home_abbr, home_abbr)
     away_abbr = translations.get(away_abbr, away_abbr)
-    upcoming_games = future_collection.find({"time": {"$gt" : datetime.now()}}, sort=[("time",1)])
+    # TODO: change timedelta back to one day
+    upcoming_games = future_collection.find({"time": {"$gt" : datetime.now() - timedelta(2)}}, sort=[("time",1)])
     for game_dict in upcoming_games:
         away_id = game_dict["away_id"]
         home_id = game_dict["home_id"]
@@ -314,13 +398,12 @@ def teamInfo(team_name):
 
 
 def trainModelsForPlayer(pid):
-    training_games = findAllTrainingGames(pid)
     to_return = {}
-    for y_key in ['PTS','TRB','AST','TOV','STL','BLK','MP']:
+    training_games = findAllTrainingGames(pid)
+    for y_key in ['PTS','TRB','AST','TOV','STL','BLK','MP','USG%']:
         core_processors, core_models = trainCoreModels(pid, training_games, y_key, weigh_recent=True, test=False, plot=False)
         trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, weigh_recent=True, test=False, plot=False)
         to_return[y_key] = (core_processors, core_models, trend_processors, trend_models)
-    print to_return.keys()
     return to_return
 
 
@@ -330,11 +413,12 @@ def getFantasyPoints(projections, point_vals):
     for pid, proj in projections.iteritems():
         pts_var = 0.0
         pts = 0.0
-        for k,(m,v) in proj.iteritems():
-            w = point_vals[k]
-            pts += w**float(m)
-            pts_var += w**2 * float(v)
+        for k, w in points_vals.iteritems():
+            stat_mean, stat_var = proj[k]
+            pts += w*float(stat_mean)
+            pts_var += w**2 * float(stat_var)
         variances[pid] = pts_var
+        points[pid] = pts
     return points, variances
 
 
@@ -351,4 +435,10 @@ def addPlayerToInvalid(game_id, player_id):
 
 if __name__ == "__main__":
     game_id = '11680?tableId=10727641'
-    analyzeFanDuelGame(game_id)
+    analyzeFanDuelGame(game_id, crawl=False)
+
+    '''
+    projected, actual = compareActualGameStats("walljo01", "201502050CHO")
+    print projected
+    print actual
+    '''

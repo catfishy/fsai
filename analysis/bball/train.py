@@ -38,6 +38,12 @@ class DataPreprocessor(object):
         self.cat_labels = cat_labels
         self.cont_samples = cont_samples
         self.cat_samples = cat_samples
+
+        if self.cont_labels is None:
+            self.cont_labels = []
+        if self.cat_labels is None:
+            self.cat_labels = []
+
         self.Y = Y
         self.timestamps = timestamps
         self.cat_kernel_splits = cat_kernel_splits
@@ -54,6 +60,7 @@ class DataPreprocessor(object):
         self.imputer = Imputer()
         
         self.sortSamples()
+        self.findBadContCols()
         self.normalizeContSamples()
 
     def sortSamples(self):
@@ -63,11 +70,24 @@ class DataPreprocessor(object):
         self.Y = [self.Y[indices[i]] for i in range(len(self.timestamps))]
 
     def normalizeContSamples(self):
-        samples = self.cont_samples
+        samples = np.array(self.cont_samples)
         samples = self.imputer.fit_transform(samples)
         samples = self.minmax.fit_transform(samples)
         samples = self.scaler.fit_transform(samples)
         self.cont_samples = samples
+        # remove bad columns from labels
+        for bad_col in sorted(self.bad_cont_cols,reverse=True):
+            self.cont_labels = scipy.delete(self.cont_labels, bad_col, 0)
+
+    def findBadContCols(self):
+        # find features that would be removed after imputing
+        to_delete = []
+        samples = np.array(self.cont_samples)
+        for col_i in range(len(self.cont_labels)):
+            bad_col = np.all(np.nan == samples[:,col_i])
+            if bad_col:
+                to_delete.append(col_i)
+        self.bad_cont_cols = to_delete
 
     def getKernel(self):
         '''
@@ -78,8 +98,14 @@ class DataPreprocessor(object):
         kernel_pieces = []
         # for conts
         if len(self.cont_labels) > 0:
-            cont_kernel = GPy.kern.Matern52(len(self.cont_labels), ARD=True)
-            kernel_pieces.append(cont_kernel)
+            for i in range(len(self.cont_labels)):
+                name = self.cont_labels[i]
+                name = name.replace('%','_percent')
+                cont_kernel = GPy.kern._src.rbf.RBF(1, name=name)
+                kernel_pieces.append(cont_kernel)
+            
+            #cont_kernel = GPy.kern.Matern52(len(self.cont_labels))
+            #kernel_pieces.append(cont_kernel)
             # GPy.kern.rbf(len(self.cont_labels))
 
         # for cats
@@ -114,7 +140,7 @@ class DataPreprocessor(object):
         return all_samples
 
     def getY(self):
-        return self.Y
+        return copy.deepcopy(self.Y)
 
     def getTrendY(self, window_size=7):
         '''
@@ -139,7 +165,7 @@ class DataPreprocessor(object):
         for i,v in enumerate(in_vals):
             trend_y.append(np.mean(in_vals[max(0,i+1-window_size):i+1]))
         trend_y = [trend_y[0]] + trend_y[:-1]
-        return trend_y
+        return trend_y 
 
     def runningPolyFit(self, window_size=7):
         in_vals = copy.deepcopy(self.Y)
@@ -160,10 +186,15 @@ class DataPreprocessor(object):
         return self.cont_labels + self.cat_labels
 
     def transform(self, cont_sample, cat_sample):
-        cont_sample = self.imputer.transform(cont_sample)
-        cont_sample = self.minmax.transform(cont_sample)
-        cont_sample = self.scaler.transform(cont_sample)
-        whole_sample = np.concatenate((cont_sample[0], cat_sample), axis=0)
+        if cont_sample:
+            samples = np.array(cont_sample)
+            for bad_col in sorted(self.bad_cont_cols,reverse=True):
+                samples = scipy.delete(samples, bad_col, 0)
+            samples = self.imputer.transform(samples)
+            samples = self.minmax.transform(samples)
+            samples = self.scaler.transform(samples)
+            cont_sample = samples[0]
+        whole_sample = np.concatenate((cont_sample, cat_sample), axis=0)
         return whole_sample
 
 
@@ -394,9 +425,9 @@ class GPCrossValidationFramework(CrossValidationFramework):
             self.X_train, self.Y_train, self.kernel)
         self.model.randomize()
         #self.model.ensure_default_constraints()
-        self.model.optimize_restarts(
-            num_restarts=self.restarts, robust=True, parallel=True, num_processes=None)
-        print self.model
+        #self.model.optimize_restarts(
+        #    num_restarts=self.restarts, robust=True, parallel=True, num_processes=None)
+        self.model.optimize('bfgs')
         self.trained = True
 
     def test(self, graph=True):
@@ -465,7 +496,11 @@ def getProcessor(pid, games, fn_name, y_key):
     for g in games:
         gid = str(g['game_id'])
         fext = featureExtractor(pid, target_game=gid) 
-        cat_labels, cat_features, cont_labels, cont_features, cat_splits = getattr(fext, fn_name)()
+        try:
+            cat_labels, cat_features, cont_labels, cont_features, cat_splits = getattr(fext, fn_name)()
+        except Exception as e:
+            print "Exception running %s for pid %s, game %s: %s" % (fn_name, pid, gid, e)
+            continue
         ts = fext.timestamp()
         y = fext.getY(y_key)
         ts_X.append(ts)
@@ -475,7 +510,6 @@ def getProcessor(pid, games, fn_name, y_key):
 
     # normalize the data
     proc = DataPreprocessor(ts_X, cont_labels, cont_X, cat_labels, cat_X, Y, cat_kernel_splits=cat_splits)
-    proc.normalizeContSamples()
     return proc
 
 def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False, plot=False):
@@ -490,10 +524,10 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
     for name, f in [('phf','runPhysicalFeatures'), ('oef','runOppositionEarnedFeatures'), ('oaf','runOppositionAllowedFeatures'), ('opf','runOppositionPlayerFeatures')]:
         processors[name] = getProcessor(pid, training_games, f, y_key)
     for name,proc in processors.iteritems():
-        print name
         X = proc.getAllSamples()
         trendY = proc.getTrendY()
         realY = proc.getY()
+        print "name: %s, ykey: %s, model: %s, x_len: %s, y_len: %s" % (pid, y_key, name, len(X), len(realY))
         labels = proc.getFeatureLabels()
         ra = proc.runningAverage()
         kernel = proc.getKernel()
@@ -515,6 +549,7 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
         models[name] = framework
 
         if test:
+
             means, variances = framework.model.predict(framework.X_test)
             predicted_trend = [_[0] for _ in means]
             predicted_vars = [_[0] for _ in variances]
@@ -526,10 +561,13 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
             predicted = [avgs[i]*_ for i,_ in enumerate(predicted_trend)]
             corrs = np.corrcoef(actual_trend, predicted_trend)
             
+            '''
+            print "%s for %s" % (pid, y_key)
             print actual_trend
             print predicted_trend
             print predicted_vars
             print "%s: %s" % (name, corrs)
+            '''
 
             if plot:
                 indices = [i for i,a in sorted(enumerate(predicted_trend), key=lambda x:x[1])]
@@ -561,10 +599,10 @@ def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, 
     for name, f in [('plf','runPlayerFeatures')]:
         processors[name] = getProcessor(pid, training_games, f, y_key)
     for name,proc in processors.iteritems():
-        print name
         X = proc.getAllSamples()
         trendY = proc.getTrendY()
         realY = proc.getY()
+        print "name: %s, ykey: %s, model: %s, x_len: %s, y_len: %s" % (pid, y_key, name, len(X), len(realY))
         labels = proc.getFeatureLabels()
         ra = proc.runningAverage()
         kernel = proc.getKernel()
@@ -574,16 +612,20 @@ def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, 
         models[name] = framework
 
         if test:
-            actual = [_[0] for _ in framework.Y_test]
             means, variances = framework.model.predict(framework.X_test)
+
+            actual = [_[0] for _ in framework.Y_test]
+            
             predicted = [_[0] for _ in means]
             predicted_vars = [_[0] for _ in variances]
             corrs = np.corrcoef(actual, predicted)
 
+            print "%s for %s" % (pid, y_key)
             print actual
             print predicted
             print predicted_vars
             print "%s: %s" % (name, corrs)
+            #print framework.model['.*lengthscale']
 
             if plot:
                 indices = [i for i,a in sorted(enumerate(predicted), key=lambda x:x[1])]
@@ -602,10 +644,9 @@ def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, 
 
 
 if __name__ == "__main__":
-    pid = "curryst01"
-    y_key = 'BLK'
+    pid = "westda01"
+    y_key = 'USG%'
     print "training %s for %s" % (pid, y_key)
     training_games = findAllTrainingGames(pid)
     core_processors, core_models = trainCoreModels(pid, training_games, y_key, test=True, plot=True)
     trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, test=True, plot=True)
-

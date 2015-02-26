@@ -1,7 +1,75 @@
 from datetime import datetime, timedelta
+import requests
+from bs4 import BeautifulSoup, element
 
 from statsETL.bball.BRcrawler import Crawler
 from statsETL.db.mongolib import *
+from analysis.util.kimono import *
+
+def updateNBARosters():
+    """
+    get all the nba roster urls,
+    then crawl for the roster
+    """
+    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=False)
+    if not results:
+        return
+    results = results['collection1']
+    roster_urls = {}
+    for info_dict in results:
+        data = info_dict['team_roster_urls']
+        team_name = data['text']
+        team_roster_url = data['href']
+        roster_urls[team_name] = team_roster_url
+
+    rcrawl = rosterCrawler(roster_urls)
+    rcrawl.run()
+
+
+class rosterCrawler(Crawler):
+
+    INIT_PAGE = ""
+
+    def __init__(self, urls, logger=None):
+        super(rosterCrawler, self).__init__(logger=logger)
+        self.name = "rosterCrawler"
+        self.urls = urls
+
+    def run(self):
+        if not self.logger:
+            self.createLogger()
+        self.logger.info("URLS: %s" % self.urls)
+        for name, url in self.urls.iteritems():
+            print url
+            team_row = team_collection.find_one({"name":str(name).strip()})
+            if not team_row:
+                raise Exception("Could not find %s" % name)
+            soup = self.visit(url)
+            odds = soup('tr', class_="oddrow")
+            evens = soup('tr', class_="evenrow")
+            pnames = []
+            for row in odds+evens:
+                pnames.append(row('a')[0].string)
+            player_dicts = translatePlayerNames(pnames)
+            player_ids = [v["_id"] for k,v in player_dicts.iteritems()]
+            team_row['players'] = player_ids
+            team_collection.save(team_row)
+            print "Saved %s roster: %s" % (name, player_ids)
+
+    def visit(self, url):
+        '''
+        Check if the url has been visited,
+        if not, grab content and convert to soup
+        '''
+        try:
+            init_response = requests.get(url, timeout=10)
+            init_content = init_response.content
+            init_soup = BeautifulSoup(init_content)
+        except Exception as e:
+            self.logger.info("%s no content: %s" % (url,e))
+            return False
+        return init_soup
+
 
 class upcomingGameCrawler(Crawler):
 
@@ -109,8 +177,12 @@ class upcomingGameCrawler(Crawler):
         return gametime
 
 if __name__=="__main__":
+    '''
     today = datetime.now() + timedelta(int(1))
-    gl_crawl = upcomingGameCrawler(date=today)
+    gl_crawl = upcomingGameCrawler(date=[today])
     gl_crawl.crawlPage()
+    '''
+    data = updateNBARosters()
+    print data
 
 
