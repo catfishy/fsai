@@ -15,12 +15,12 @@ import copy
 import itertools
 from collections import defaultdict
 from datetime import datetime
+import time
 import numpy as np
 import traceback
 import multiprocessing as mp
 import Queue
 
-from statsETL.bball.NBAcrawler import upcomingGameCrawler
 from statsETL.db.mongolib import *
 from analysis.bball.train import *
 from analysis.bball.playerAnalysis import featureExtractor, findAllTrainingGames
@@ -35,7 +35,38 @@ FANDUEL_PT_VALUES = {'TOV': -1.0,
                      'PTS': 1.0}
 
 
-def analyzeFanDuelGame(game_id, crawl=True, window_size=15):
+def modelPlayersInUpcomingGames(days_ahead=3):
+    upper_limit = datetime.now() + timedelta(days_ahead)
+    upcoming_games = future_collection.find({"time": {"$gt" : datetime.now()}}, sort=[("time",1)])
+    for matched_game in upcoming_games:
+        if matched_game['time'] > upper_limit:
+            continue
+        avai_players = availablePlayers(matched_game)
+        home_players = avai_players[home_name]
+        away_players = avai_players[away_name]
+        all_players = home_players + away_players
+        # train/project for players if necessary
+        process_inputs = []
+        invalid_players = []
+        stat_projections = {}
+        for pid in all_players:
+            process_inputs.append((pid, matched_game))
+
+        # in parallel, train and project players that need it
+        poolsize = 4
+        args = iter(process_inputs)
+        pool = mp.Pool(poolsize)
+        pool_results = pool.imap_unordered(trainAndProjectPlayer, args)
+        pool.close()
+        pool.join()
+        for pid,pid_results in pool_results:
+            if pid_results is None:
+                invalid_players.append(pid)
+            else:
+                stat_projections[pid] = pid_results        
+        print "%s: %s players projected, %s invalid" % (matched_game['_id'], len(stat_projections), len(invalid_players))
+
+def analyzeFanDuelGame(game_id, crawl=True):
     """
     create new game row in db
     create kimono api, continuously update scraped values (LOG)
@@ -53,9 +84,6 @@ def analyzeFanDuelGame(game_id, crawl=True, window_size=15):
     players_by_game = defaultdict(list)
     for pid, game in kimono_info['player_games'].iteritems():
         players_by_game[game].append(pid)
-
-    # sync upcoming games
-    crawlUpcomingGames(days_ahead=7)
     valid_game_ids = set(kimono_info['player_games'].values())
 
     # kimono invalid players, adjusted by manual in/validation
@@ -99,8 +127,10 @@ def analyzeFanDuelGame(game_id, crawl=True, window_size=15):
 
     print "Invalids from Crawl: %s, %s" % (len(invalid_players), invalid_players)
 
-    # train model for players and make predictions
+    # train/project for players if necessary
     process_inputs = []
+    to_train_pids = []
+    stat_projections = {}
     for pid in kimono_info['players']:
         # skip invalid players
         if pid in invalid_players:
@@ -108,18 +138,31 @@ def analyzeFanDuelGame(game_id, crawl=True, window_size=15):
         # get the matched game
         gid = kimono_info['player_games'][pid]
         matched_game = upcoming_by_id[gid]
-        process_inputs.append((pid, matched_game))
+        # look for previous trainings
+        row = projection_collection.find_one({"player_id": pid, "time": matched_game['time']})
+        if not row:
+            process_inputs.append((pid, matched_game))
+            to_train_pids.append(pid)
+        else:
+            # average out the values
+            vals = defaultdict(list)
+            for pjs in row['projections']:
+                for k,v in pjs.iteritems():
+                    avgs[k].append(v)
+            avgs = {}
+            for k,v in vals.items():
+                mean_mean = np.mean([_[0] for _ in v])
+                var_mean = np.mean([_[1] for _ in v])
+                avgs[k] = (mean_mean, var_mean)
+            stat_projections[pid] = avgs
 
-    # train and project players in parallel
+    # in parallel, train and project players that need it
     poolsize = 4
     args = iter(process_inputs)
     pool = mp.Pool(poolsize)
     pool_results = pool.imap_unordered(trainAndProjectPlayer, args)
     pool.close()
     pool.join()
-
-    # get results
-    stat_projections = {}
     for pid,pid_results in pool_results:
         if pid_results is None:
             invalid_players.append(pid)
@@ -152,10 +195,13 @@ def analyzeFanDuelGame(game_id, crawl=True, window_size=15):
                            kimono_info['roster_positions'])
 
     optimal = optros.constructOptimalByPoints()
-    for i,opt in enumerate(optimal):
+    for i,opts in enumerate(optimal):
         # just get players
-        only_players = [_[0] for _ in opt]
-        kimono_info['roster_%s' % (i+1)] = only_players
+        only_player_rosters = []
+        for opt in opts:
+            only_players = [_[0] for _ in opt]
+            only_player_rosters.append(only_players)
+        kimono_info['roster_%s' % (i+1)] = only_player_rosters
 
     # save matchup info
     data = prepUpdate(game_id, kimono_info)
@@ -217,6 +263,8 @@ def trainAndProjectPlayer(args):
     args must be a tuple of (pid, matched_game, output_queue)
     """
     pid, matched_game = args
+    game_time = matched_game['time']
+
     # get upcoming game features for player
     upcoming_features = getUpcomingGameFeatures(pid, matched_game)
 
@@ -235,6 +283,23 @@ def trainAndProjectPlayer(args):
         pproj[y_key] = (mean, variance)
 
     print "%s: %s" % (pid, pproj)
+
+    # save projection
+    try:
+        current = datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+        row = projection_collection.find_one({"player_id": pid, "time": game_time})
+        if row:
+            old_proj = row['projections']
+            old_proj[current] = pproj
+            row['projections'][current] = old_proj
+        else:
+            row = {"player_id": pid,
+                   "time": game_time,
+                   "projections": {current: pproj}}
+        nba_conn.saveDocument(projection_collection, row)
+    except Exception as e:
+        print 'Exception saving projection: %s' % e
+
     return (pid, pproj)
 
 
@@ -306,15 +371,6 @@ def makeProjection(new_features, core_processors, core_models, trend_processors,
 
     return (avg,total_variance)
 
-def crawlUpcomingGames(days_ahead=7):
-    dates = []
-    new_games = []
-    for i in range(days_ahead):
-        d = datetime.now() + timedelta(i)
-        gl_crawl = upcomingGameCrawler(date=d)
-        new_games = gl_crawl.crawlPage()
-    return new_games
-
 def prepUpdate(game_id, kimono_info):
     '''
     Pop unnecessary items from kimono_info
@@ -367,7 +423,10 @@ def matchUpcomingGame(home_abbr, away_abbr):
     # fanduel to nba.com translations
     translations = {'SA': 'SAS',
                     'GS': 'GSW',
-                    'NO': 'NOP'
+                    'NO': 'NOP',
+                    'CHA': 'CHO',
+                    'NY': 'NYK',
+                    'BKN': 'BRK'
                     }
     home_abbr = translations.get(home_abbr, home_abbr)
     away_abbr = translations.get(away_abbr, away_abbr)
@@ -399,7 +458,7 @@ def teamInfo(team_name):
 
 def trainModelsForPlayer(pid):
     to_return = {}
-    training_games = findAllTrainingGames(pid)
+    training_games = findAllTrainingGames(pid, limit=40)
     for y_key in ['PTS','TRB','AST','TOV','STL','BLK','MP','USG%']:
         core_processors, core_models = trainCoreModels(pid, training_games, y_key, weigh_recent=True, test=False, plot=False)
         trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, weigh_recent=True, test=False, plot=False)
@@ -413,7 +472,7 @@ def getFantasyPoints(projections, point_vals):
     for pid, proj in projections.iteritems():
         pts_var = 0.0
         pts = 0.0
-        for k, w in points_vals.iteritems():
+        for k, w in point_vals.iteritems():
             stat_mean, stat_var = proj[k]
             pts += w*float(stat_mean)
             pts_var += w**2 * float(stat_var)
@@ -434,8 +493,8 @@ def addPlayerToInvalid(game_id, player_id):
     nba_conn.saveDocument(upcoming_collection, row)
 
 if __name__ == "__main__":
-    game_id = '11680?tableId=10727641'
-    analyzeFanDuelGame(game_id, crawl=False)
+    game_id = '11699?tableId=10804547'
+    analyzeFanDuelGame(game_id, crawl=True)
 
     '''
     projected, actual = compareActualGameStats("walljo01", "201502050CHO")

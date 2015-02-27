@@ -97,7 +97,7 @@ class MongoConn:
 # get nba db conn
 nba_conn = MongoConn(db=NBA_DB)
 
-# get collections
+# create collections
 team_game_collection = nba_conn.getCollection("team_games")
 player_game_collection = nba_conn.getCollection("player_games")
 game_collection = nba_conn.getCollection("games")
@@ -105,3 +105,17 @@ team_collection = nba_conn.getCollection("teams")
 player_collection = nba_conn.getCollection("players")
 upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
 future_collection = nba_conn.getCollection("future") # for future nba games
+projection_collection = nba_conn.getCollection("projections") # for modeling projections by player
+
+# ensure indices
+nba_conn.ensureIndex(team_collection, [("url", 1)])
+nba_conn.ensureIndex(player_collection, [("url", 1)])
+nba_conn.ensureIndex(team_game_collection, [("team_id", 1)])
+nba_conn.ensureIndex(team_game_collection, [("game_id", 1)])
+nba_conn.ensureIndex(player_game_collection, [("player_id", 1)])
+nba_conn.ensureIndex(player_game_collection, [("game_id", 1)])
+nba_conn.ensureIndex(game_collection, [('url',1)])
+nba_conn.ensureIndex(team_game_collection, [("team_id", 1),("game_id", 1)], unique=True)
+nba_conn.ensureIndex(player_game_collection, [("player_id", 1),("game_id", 1)], unique=True)
+nba_conn.ensureIndex(projection_collection, [("player_id", 1),("time", 1)], unique=True)
+

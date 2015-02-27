@@ -6,6 +6,7 @@ import requests
 import simplejson as json
 
 from statsETL.db.mongolib import *
+from statsETL.bball.NBAcrawler import updateNBARosterURLS, translatePlayerNames
 
 KIMONO_URL_ROOT = "https://www.kimonolabs.com/kimonoapis"
 KIMONO_URL_DATA = "https://www.kimonolabs.com/api"
@@ -14,6 +15,24 @@ KIMONO_API_TOKEN = "cr0OJmo4rEyGZ1PAWOlj3lqstCxwzugV"
 FANDUEL_DRAFT_PAGE_API = "6a0gv9bw"
 NBA_ROSTER_URLS_API = "apxs63v4"
 NBA_ROSTER_API = "26djfnzm"
+
+def updateNBARosters():
+    """
+    get all the nba roster urls,
+    then crawl for the roster
+    """
+    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=False)
+    if not results:
+        return
+    results = results['collection1']
+    roster_urls = {}
+    for info_dict in results:
+        data = info_dict['team_roster_urls']
+        team_name = data['text']
+        team_roster_url = data['href']
+        roster_urls[team_name] = team_roster_url
+    updateNBARosterURLS(roster_urls)
+
 
 def fanDuelNBADraftAPIContent(targeturl, crawl=True):
     """
@@ -105,8 +124,6 @@ def fanDuelNBADraftAPIContent(targeturl, crawl=True):
             'gtds': gtd_pids
             }
     return data
-
-
 
 
 def translatePlayerNames(player_list):

@@ -33,7 +33,7 @@ class DataPreprocessor(object):
     concatenates cont and cat vars to product single sample list
     """
 
-    def __init__(self, timestamps, cont_labels, cont_samples, cat_labels, cat_samples, Y, cat_kernel_splits=None):
+    def __init__(self, timestamps, cont_labels, cont_samples, cat_labels, cat_samples, Y, cat_kernel_splits=None, weigh_recent=False):
         self.cont_labels = cont_labels
         self.cat_labels = cat_labels
         self.cont_samples = cont_samples
@@ -63,11 +63,30 @@ class DataPreprocessor(object):
         self.findBadContCols()
         self.normalizeContSamples()
 
+        if weigh_recent:
+            self.weighRecent()
+
+    def weighRecent(self):
+        """
+        duplicate more recent samples
+        """
+        top = 10
+        to_add_cont = copy.deepcopy(self.cont_samples[-top:])
+        to_add_cat = copy.deepcopy(self.cat_samples[-top:])
+        to_add_Y = copy.deepcopy(self.Y[-top:])
+        to_add_timestamps = copy.deepcopy(self.timestamps[-top:])
+        self.cont_samples = np.concatenate((self.cont_samples,to_add_cont))
+        self.cat_samples = np.concatenate((self.cat_samples, to_add_cat))
+        self.Y = np.concatenate((self.Y, to_add_Y))
+        self.timestamps = np.concatenate((self.timestamps,to_add_timestamps))
+        self.sortSamples()
+
     def sortSamples(self):
         indices = [i for i,ts in sorted(enumerate(self.timestamps), key=lambda x: x[1])]
         self.cont_samples = [self.cont_samples[indices[i]] for i in range(len(self.timestamps))]
         self.cat_samples = [self.cat_samples[indices[i]] for i in range(len(self.timestamps))]
         self.Y = [self.Y[indices[i]] for i in range(len(self.timestamps))]
+        self.timestamps = list(sorted(self.timestamps))
 
     def normalizeContSamples(self):
         samples = np.array(self.cont_samples)
@@ -484,7 +503,7 @@ def getUpcomingGameFeatures(pid, matched_game):
         features[name] = new_features
     return features
 
-def getProcessor(pid, games, fn_name, y_key):
+def getProcessor(pid, games, fn_name, y_key, weigh_recent=False):
     cat_X = []
     cont_X = []
     Y = []
@@ -509,7 +528,7 @@ def getProcessor(pid, games, fn_name, y_key):
         Y.append(y)
 
     # normalize the data
-    proc = DataPreprocessor(ts_X, cont_labels, cont_X, cat_labels, cat_X, Y, cat_kernel_splits=cat_splits)
+    proc = DataPreprocessor(ts_X, cont_labels, cont_X, cat_labels, cat_X, Y, cat_kernel_splits=cat_splits, weigh_recent=weigh_recent)
     return proc
 
 def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False, plot=False):
@@ -522,7 +541,7 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
         test_size = 0.0
 
     for name, f in [('phf','runPhysicalFeatures'), ('oef','runOppositionEarnedFeatures'), ('oaf','runOppositionAllowedFeatures'), ('opf','runOppositionPlayerFeatures')]:
-        processors[name] = getProcessor(pid, training_games, f, y_key)
+        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent)
     for name,proc in processors.iteritems():
         X = proc.getAllSamples()
         trendY = proc.getTrendY()

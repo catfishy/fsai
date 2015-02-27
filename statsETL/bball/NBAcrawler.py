@@ -1,29 +1,51 @@
 from datetime import datetime, timedelta
+import re
+
+
 import requests
 from bs4 import BeautifulSoup, element
 
-from statsETL.bball.BRcrawler import Crawler
 from statsETL.db.mongolib import *
-from analysis.util.kimono import *
+from statsETL.util.crawler import *
 
-def updateNBARosters():
-    """
-    get all the nba roster urls,
-    then crawl for the roster
-    """
-    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=False)
-    if not results:
-        return
-    results = results['collection1']
-    roster_urls = {}
-    for info_dict in results:
-        data = info_dict['team_roster_urls']
-        team_name = data['text']
-        team_roster_url = data['href']
-        roster_urls[team_name] = team_roster_url
+def crawlUpcomingGames(days_ahead=7):
+    dates = []
+    new_games = []
+    for i in range(days_ahead):
+        d = datetime.now() + timedelta(i)
+        gl_crawl = upcomingGameCrawler(date=d)
+        new_games = gl_crawl.crawlPage()
+    return new_games
 
+def updateNBARosterURLS(roster_urls):
     rcrawl = rosterCrawler(roster_urls)
     rcrawl.run()
+
+def translatePlayerNames(player_list):
+    '''
+    Includes Hardcoded translations
+    '''
+    translations = {"Patty": "Patrick"}
+
+    player_dicts = {}
+    for d in player_list:
+        name_parts = [x.strip() for x in d.split(' ') if x.strip()]
+        query = ''
+        for p in name_parts:
+            if p in translations:
+                p = translations[p]
+            query += '.*%s' % p.replace('.','.*')
+        if query:
+            query += '.*'
+        full_matched = player_collection.find_one({'full_name' : {'$regex' : re.compile(query)}})
+        nick_matched = player_collection.find_one({'nickname' : {'$regex' : re.compile(query)}})
+        if full_matched or nick_matched:
+            match_obj = full_matched or nick_matched
+            #print "%s, match: %s" % (d, match_obj)
+            player_dicts[d] = match_obj
+        else:
+            print "%s, no match: %s" % (d, query)
+    return player_dicts
 
 
 class rosterCrawler(Crawler):
@@ -182,7 +204,5 @@ if __name__=="__main__":
     gl_crawl = upcomingGameCrawler(date=[today])
     gl_crawl.crawlPage()
     '''
-    data = updateNBARosters()
-    print data
 
 

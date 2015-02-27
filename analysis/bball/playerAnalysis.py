@@ -15,19 +15,18 @@ import numpy as np
 from statsETL.db.mongolib import *
 
 
-def findAllTrainingGames(pid):
+def findAllTrainingGames(pid, limit=40):
     '''
     TODO: FILTER games by player's current team????? (or just general teammate context)
     '''
 
     # find all training games
     playergames = list(player_game_collection.find({"player_id": pid}, sort=[("game_time",-1)]))
-    # drop the first 3 games
-    playergames = playergames[:-3]
     # drop games where mp == 0
     valid_games = [g for g in playergames if g['MP'] != 0.0]
+    # limit
+    valid_games = valid_games[:limit]
     return valid_games
-
 
 class featureExtractor(object):
 
