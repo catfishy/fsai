@@ -45,7 +45,15 @@ class featureExtractor(object):
                     "STL", "TRB", "TOV%", "AST%", "FTA", "eFG%", "BLK", "FTr", 
                     "+/-", "USG%", "DRB%", "TS%", "MP", "DRtg", "ORtg", "TRB%", 
                     "ORB", "3P%"]
+    PER48_STATS = ["FT", "3P", "TOV", "FG", "3PA", "DRB", "AST", "PF", 
+                   "PTS", "FGA", "STL", "TRB", "FTA", "BLK", "ORB"]
     TEAM_STATS = ["TOV%", "Pace", "ORtg", "FT/FGA", "ORB%", "eFG%",  "T"]
+    INTENSITY_STATS = ['own_win_rate','opp_win_rate','own_streak','opp_streak',
+                       'win_rate_diff','own_aways_in_10','opp_aways_in_10','mp_in_10',
+                       "TOV%_diff", "Pace_diff", "ORtg_diff", "FT/FGA_diff", "ORB%_diff", 
+                       "eFG%_diff",  "T_diff"]
+
+
 
     def __init__(self, player_id, target_game=None):
         self.pid = str(player_id)
@@ -79,6 +87,10 @@ class featureExtractor(object):
             # find team game info
             self.team_game_info = team_game_collection.find_one({"team_id" : self.player_team,
                                                                  "game_id": self.target_game_id})
+            if self.player_team == self.target_game_info['home_id']:
+                self.opp_team = self.target_game_info['away_id']
+            else:
+                self.opp_team = self.target_game_info['home_id']
         else:
             self.target_game_info = None
             self.player_game_info = None
@@ -91,6 +103,9 @@ class featureExtractor(object):
                 self.team = self.team[0]
             self.player_team = self.team["_id"]
             self.ts = self.upcoming_game['time']
+            team1_id = team_collection.find_one({"name":self.upcoming_game['home_team_name']})["_id"]
+            team2_id = team_collection.find_one({"name":self.upcoming_game['away_team_name']})["_id"]
+            self.opp_team = team2_id if (self.player_team == team1_id) else team2_id
 
         # get all teams and locations
         results = team_collection.find({})
@@ -104,6 +119,25 @@ class featureExtractor(object):
 
     def timestamp(self):
         return self.ts
+
+    def runIntensityFeatures(self):
+        features = self.intensityFeatures()
+        cont_features = []
+        cont_labels = []
+        cat_features = []
+        cat_labels = []
+
+        # opp team earned
+        for tkey in self.INTENSITY_STATS:
+            value = features[tkey]
+            label = "%s_%s" % ('intensity', tkey)
+            cont_features.append(value)
+            cont_labels.append(label)
+
+        # features splits
+        cat_feat_splits = []
+
+        return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
     def runPhysicalFeatures(self):
         opp_team, opp_loc = self.oppositionLocationFeatures()
@@ -173,6 +207,25 @@ class featureExtractor(object):
 
         return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
+    def runFacingPlayerFeatures(self):
+        facing = self.facingPlayerFeatures()
+        cont_features = []
+        cont_labels = []
+        cat_features = []
+        cat_labels = []
+        # opp player stats
+        for pkey in self.PLAYER_STATS:
+            value = facing[pkey]
+            label = "%s_%s" % ('op_allowed', pkey)
+            cont_features.append(value)
+            cont_labels.append(label)
+
+        # features splits
+        cat_feat_splits = []
+
+        return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
+
+
     def runOppositionPlayerFeatures(self):
         op_allowed = self.opposingPlayerAllowedStatFeatures()
         cont_features = []
@@ -203,75 +256,10 @@ class featureExtractor(object):
             label = "%s_%s" % ('pstat', pkey)
             cont_features.append(value)
             cont_labels.append(label)
-
         # features splits
         cat_feat_splits = []
         return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
-    def run(self):
-        pstat = self.playerStatFeatures()
-        op_allowed = self.opposingPlayerAllowedStatFeatures()
-        ot_earned, ot_allowed = self.opposingTeamStatFeatures()
-        opp_team, opp_loc = self.oppositionLocationFeatures()
-        bb = self.backTobackFeatures()
-        
-        # order them
-        cont_features = []
-        cont_labels = []
-        cat_features = []
-        cat_labels = []
-
-        # player stats
-        for pkey in self.PLAYER_STATS:
-            value = pstat[pkey]
-            label = "%s_%s" % ('pstat', pkey)
-            cont_features.append(value)
-            cont_labels.append(label)
-
-        # opp player stats
-        for pkey in self.PLAYER_STATS:
-            value = op_allowed[pkey]
-            label = "%s_%s" % ('op_allowed', pkey)
-            cont_features.append(value)
-            cont_labels.append(label)
-
-        # opp team earned
-        for tkey in self.TEAM_STATS:
-            value = ot_earned[tkey]
-            label = "%s_%s" % ('ot_earned', tkey)
-            cont_features.append(value)
-            cont_labels.append(label)
-
-        # opp team allowed
-        for tkey in self.TEAM_STATS:
-            value = ot_allowed[tkey]
-            label = "%s_%s" % ('ot_allowed', tkey)
-            cont_features.append(value)
-            cont_labels.append(label)
-
-        # opp team one hot
-        opp_team_keys = sorted(opp_team.keys())
-        cat_features.append([opp_team[k] for k in opp_team_keys])
-        cat_labels.append(opp_team_keys)
-
-        # game location one hot
-        loc_keys = sorted(opp_loc.keys())
-        cat_features.append([opp_loc[k] for k in loc_keys])
-        cat_labels.append(loc_keys)
-        
-        # back to back features
-        bb_keys = sorted(bb.keys())
-        cat_features.append([bb[k] for k in bb_keys])
-        cat_labels.append(bb_keys)
-        
-        # flatten categorical features
-        cat_features = [item for sublist in cat_features for item in sublist]
-        cat_labels = [item for sublist in cat_labels for item in sublist]
-
-        # features splits
-        cat_feat_splits = [len(opp_team.keys()), len(opp_loc.keys()), len(bb.keys())]
-
-        return (cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
 
     def getY(self, key):
         if self.player_game_info:
@@ -279,32 +267,135 @@ class featureExtractor(object):
         else:
             raise Exception("Game is upcoming")
 
+    def intensityFeatures(self):
+        '''
+        - own winning percentage
+        - opp winning percentage
+        - own streak
+        - opp streak
+        - winning percentage difference
+        - away games in last 10 games
+        - mp in last 10 days
+
+        - team position minutes fraction ???
+        - team 10 game average stat differences ???
+        '''
+        own_team = self.player_team
+        if self.target_game_info:
+            game_time = self.team_game_info['game_time']
+            if self.target_game_info['home_id'] == own_team:
+                opp_team = self.target_game_info['away_id']
+            else:
+                opp_team = self.target_game_info['home_id']
+        else:
+            game_time = self.upcoming_game['time']
+            # find the team ids by team name
+            team1_id = team_collection.find_one({"name":self.upcoming_game['home_team_name']})["_id"]
+            team2_id = team_collection.find_one({"name":self.upcoming_game['away_team_name']})["_id"]
+            opp_team = team2_id if (self.player_team == team1_id) else team2_id
+        own_query = {"teams": own_team, "time": {"$lt": game_time}}
+        opp_query = {"teams": opp_team, "time": {"$lt": game_time}}
+        own_team_games = [_ for _ in game_collection.find(own_query, sort=[("time",-1)], limit=10)]
+        opp_team_games = [_ for _ in game_collection.find(opp_query, sort=[("time",-1)], limit=10)]
+        own_stats = [team_game_collection.find_one({"team_id": own_team, "game_id": _["_id"]}) for _ in own_team_games]
+        opp_stats = [team_game_collection.find_one({"team_id": opp_team, "game_id": _["_id"]}) for _ in opp_team_games]
+        tendays_ago = game_time - timedelta(10.5)
+        player_stats = player_game_collection.find({"player_id": self.pid, "game_time" : {"$lt": game_time, "$gt": tendays_ago}})
+        mp_in_10 = sum([float(_.get('MP',0.0)) for _ in player_stats])
+        own_most_recent = own_team_games[0] if len(own_team_games)>0 else None
+        opp_most_recent = opp_team_games[0] if len(opp_team_games)>0 else None
+
+        # calc diff in team performance
+        own_avg_stats = defaultdict(list)
+        for s in own_stats:
+            for k in self.TEAM_STATS:
+                own_avg_stats[k].append(s[k])
+
+        opp_avg_stats = defaultdict(list)
+        for s in opp_stats:
+            for k in self.TEAM_STATS:
+                opp_avg_stats[k].append(s[k])
+
+        stat_differences = {}
+        for k in self.TEAM_STATS:
+            stat_differences['%s_diff' % k] = np.mean(own_avg_stats[k]) - np.mean(opp_avg_stats[k])
+
+        # calculate number of aways in last 10
+        own_aways = len([_ for _ in own_stats if _.get('location') == 'Away'])
+        opp_aways = len([_ for _ in opp_stats if _.get('location') == 'Away'])
+
+        # parse records and streaks
+        if own_most_recent is None:
+            own_record = None
+        elif own_team == own_most_recent['home_id']:
+            own_record = own_most_recent['home_record']
+            own_streak = own_most_recent['home_streak']
+        else:
+            own_record = own_most_recent['away_record']
+            own_streak = own_most_recent['away_streak']
+        if opp_most_recent is None:
+            opp_record = None
+        elif opp_team == opp_most_recent['home_id']:
+            opp_record = opp_most_recent['home_record']
+            opp_streak = opp_most_recent['home_streak']
+        else:
+            opp_record = opp_most_recent['away_record']
+            opp_streak = opp_most_recent['away_streak']
+
+        if own_record is None:
+            own_winning_percent = 1.0
+            own_streak = 0.0
+        else:
+            own_record_parts = own_record.split('-')
+            own_wins = int(own_record_parts[0].strip())
+            own_losses = int(own_record_parts[1].strip())
+            own_winning_percent = own_wins / float(own_losses + own_wins)
+            if 'Lost' in own_streak:
+                own_streak = -int(own_streak.replace('Lost ','').strip())
+            else:
+                own_streak = int(own_streak.replace('Won ','').strip())
+        if opp_record is None:
+            opp_winning_percent = 1.0
+            opp_streak = 0.0
+        else:
+            opp_record_parts = opp_record.split('-')
+            opp_wins = int(opp_record_parts[0].strip())
+            opp_losses = int(opp_record_parts[1].strip())
+            opp_winning_percent = opp_wins / float(opp_losses + opp_wins)
+            if 'Lost' in opp_streak:
+                opp_streak = -int(opp_streak.replace('Lost ','').strip())
+            else:
+                opp_streak = int(opp_streak.replace('Won ','').strip())
+
+        # load feature dictionary
+        data = {'own_win_rate': own_winning_percent,
+                'opp_win_rate': opp_winning_percent,
+                'own_streak': own_streak,
+                'opp_streak': opp_streak,
+                'win_rate_diff': own_winning_percent-opp_winning_percent,
+                'own_aways_in_10': own_aways,
+                'opp_aways_in_10': opp_aways,
+                'mp_in_10': mp_in_10
+                }
+        data.update(stat_differences)
+        return data
+
+
     def oppositionLocationFeatures(self):
         if self.target_game_info:
-            if self.player_team == self.target_game_info['team1_id']:
-                opposing_team = self.target_game_info['team2_id']
-            else:
-                opposing_team = self.target_game_info['team1_id']
-            home_team = team_collection.find_one({"_id":self.target_game_info['team2_id']})
-            if not home_team:
-                raise Exception({"_id":self.target_game_info['team2_id']})
-            game_location = home_team['location']
+            home_team = team_collection.find_one({"_id":self.target_game_info['home_id']})
         else:
-            # find the team ids by team name
-            team1 = team_collection.find_one({"name":self.upcoming_game['home_team_name']})
-            team1_id = team1["_id"]
-            team2_id = team_collection.find_one({"name":self.upcoming_game['away_team_name']})["_id"]
-            if self.player_team == team1_id:
-                opposing_team = team2_id
-            else:
-                opposing_team = team1_id
-            game_location = team1['location']
+            home_team = team_collection.find_one({"name":self.upcoming_game['home_team_name']})
 
+        if not home_team:
+            raise Exception("Could not find HOME team")
+
+        game_location = home_team['location']
         opp_teams_one_hot = {x:-1 for x in self.all_teams}
         location_one_hot = {x:-1 for x in self.all_locations}
 
         try:
-            opp_teams_one_hot[opposing_team] = 1
+            opp_teams_one_hot[self.opp_team] = 1
             location_one_hot[game_location] = 1
         except ValueError as e:
             raise Exception("Team or location not found in DB")
@@ -357,23 +448,33 @@ class featureExtractor(object):
             four_five = 1
         return {"b2b":b2b, "2of3": two_three, "3of4": three_four, "4of5": four_five}
 
+
+    def convertPlayerGameStatsToPer48(self, stats):
+        new_stats = []
+        for s in stats:
+            mp = float(s['MP'])
+            if mp == 0.0:
+                new_stats.append(s)
+            else:
+                ratio = 48.0 / mp
+                for k in self.PER48_STATS:
+                    s[k] = s[k] * ratio
+                new_stats.append(s)
+        return new_stats
+
     def playerStatFeatures(self):
-        if not self.target_game_id:
-            # grab most recent 3-10 games for the player
-            results = player_game_collection.find({"player_id":self.pid}, 
-                                                  sort=[("game_time",-1)], 
-                                                  limit=10)
-            results = list(results)
-        else:
-            # grab the most recent 3-10 games for the player leading up to the target game
-            target_game_time = self.target_game_info["time"]
-            results = player_game_collection.find({"player_id": self.pid,
-                                                   "game_time": {"$lt": target_game_time}}, 
-                                                  sort=[("game_time",-1)], 
-                                                  limit=10)
-            results = list(results)
+        # grab the most recent 3-10 games for the player leading up to the target game
+        results = player_game_collection.find({"player_id": self.pid,
+                                               "game_time": {"$lt": self.ts}}, 
+                                              sort=[("game_time",-1)], 
+                                              limit=10)
+        results = list(results)
+
         if len(results) < 3:
-            raise Exception("Could not find more than 3 prior games for player %s" % self.pid)
+            raise Exception("Could not find enough prior games for player %s" % self.pid)
+
+        results = self.convertPlayerGameStatsToPer48(results)
+
         trajectories = {k:[] for k in self.PLAYER_STATS}
         for stat in results:
             for k in self.PLAYER_STATS:
@@ -384,40 +485,62 @@ class featureExtractor(object):
             trajectories[k] = np.mean(np.mean([x for x in v if x is not None]))
         return trajectories
 
-    def opposingPlayerAllowedStatFeatures(self):
-        # for the games the opposing team has played, 
-        # find the player opposing the opposing team who played the same position
-        # and average those stats
-        if not self.target_game_id:
-            # find the team ids by team name
-            team1_id = team_collection.find_one({"name":self.upcoming_game['home_team_name']})["_id"]
-            team2_id = team_collection.find_one({"name":self.upcoming_game['away_team_name']})["_id"]
-            if self.player_team == team1_id:
-                opp_team = team2_id
-            else:
-                opp_team = team1_id
-            # grab most recent 3-10 games for the team
-            query = {"team_id": opp_team}
-            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
-            results = list(results)
-        else:
-            if self.player_team == self.target_game_info['team1_id']:
-                opp_team = self.target_game_info['team2_id']
-            else:
-                opp_team = self.target_game_info['team1_id']
-            # grab the most recent 3-10 games for the player leading up to the target game
-            target_game_time = self.target_game_info["time"]
-            query = {"team_id": opp_team, "game_time": {"$lt": target_game_time}}
-            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
-            results = list(results)
+    def facingPlayerFeatures(self):
+        query = {"team_id": self.opp_team, "game_time": {"$lt": self.ts}}
+        results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
+        results = list(results)
+
         if len(results) < 3:
             raise Exception("Could not find more than 3 prior games for team: %s" % query)
+
+        position = self.player_info["position"][0] # take the first position player plays
+        player_stats = defaultdict(list)
+        for team_stat in results:
+            players_in_game = list(player_game_collection.find({"game_id": team_stat['game_id'], 
+                                                                "player_team": team_stat['team_id']}))
+            for pstat in players_in_game:
+                player_id = pstat['player_id']
+                player_row = player_collection.find_one({"_id": player_id})
+                if not player_row:
+                    print "Could not find player %s" % player_id
+                    continue
+                if position in player_row['position']:
+                    player_stats[team_stat['game_id']].append(pstat)
+        used_stats = []
+        for k,v in player_stats.iteritems():
+            if len(v) > 1:
+                # choose one with the most minutes
+                mp = [x['MP'] for x in v]
+                max_index = mp.index(max(mp))
+                used_stats.append(v[max_index])
+            else:
+                used_stats.append(v[0])
+
+        used_stats = self.convertPlayerGameStatsToPer48(used_stats)
+
+        trajectories = {k:[] for k in self.PLAYER_STATS}
+        for stat in used_stats:
+            for k in self.PLAYER_STATS:
+                trajectories[k].append(stat.get(k))
+        # average out the stats
+        for k,v in trajectories.iteritems():
+            trajectories[k] = np.mean([x for x in v if x is not None])
+        return trajectories
+
+    def opposingPlayerAllowedStatFeatures(self):
+        query = {"team_id": self.opp_team, "game_time": {"$lt": self.ts}}
+        results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
+        results = list(results)
+
+        if len(results) < 3:
+            raise Exception("Could not find more than 3 prior games for team: %s" % query)
+
         # use game ids for allowed stats
         game_ids = [x['game_id'] for x in results]
         # calculate allowed stats
         allowed_team_stats = []
         for gid in game_ids:
-            result = team_game_collection.find_one({"game_id": gid, "team_id": {'$ne': opp_team}})
+            result = team_game_collection.find_one({"game_id": gid, "team_id": {'$ne': self.opp_team}})
             allowed_team_stats.append(result)
         # find the player stats for these games for the same position
         position = self.player_info["position"][0] # take the first position player plays
@@ -442,6 +565,9 @@ class featureExtractor(object):
                 used_stats.append(v[max_index])
             else:
                 used_stats.append(v[0])
+
+        used_stats = self.convertPlayerGameStatsToPer48(used_stats)
+
         trajectories = {k:[] for k in self.PLAYER_STATS}
         for stat in used_stats:
             for k in self.PLAYER_STATS:
@@ -452,28 +578,10 @@ class featureExtractor(object):
         return trajectories
 
     def opposingTeamStatFeatures(self):
-        if not self.target_game_id:
-            # find the team ids by team name
-            team1_id = team_collection.find_one({"name":self.upcoming_game['home_team_name']})["_id"]
-            team2_id = team_collection.find_one({"name":self.upcoming_game['away_team_name']})["_id"]
-            if self.player_team == team1_id:
-                opp_team = team2_id
-            else:
-                opp_team = team1_id
-            # grab most recent 3-10 games for the team
-            query = {"team_id": opp_team}
-            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
-            results = list(results)
-        else:
-            if self.player_team == self.target_game_info['team1_id']:
-                opp_team = self.target_game_info['team2_id']
-            else:
-                opp_team = self.target_game_info['team1_id']
-            # grab the most recent 3-10 games for the team leading up to the target game
-            target_game_time = self.target_game_info["time"]
-            query = {"team_id": opp_team, "game_time": {"$lt": target_game_time}}
-            results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
-            results = list(results)
+        query = {"team_id": self.opp_team, "game_time": {"$lt": self.ts}}
+        results = team_game_collection.find(query, sort=[("game_time",-1)], limit=10)
+        results = list(results)
+
         if len(results) < 3:
             raise Exception("Could not find more than 3 prior games for team: %s" % query)
 
@@ -492,7 +600,7 @@ class featureExtractor(object):
         # calculate allowed stats
         allowed_team_stats = []
         for gid in game_ids:
-            result = team_game_collection.find_one({"game_id": gid, "team_id": {'$ne': opp_team}})
+            result = team_game_collection.find_one({"game_id": gid, "team_id": {'$ne': self.opp_team}})
             allowed_team_stats.append(result)
         allowed_trajectories = {k:[] for k in self.TEAM_STATS}
         for stat in allowed_team_stats:
@@ -551,7 +659,7 @@ class featureExtractor(object):
 '''
 
 if __name__=="__main__":
-    pid = "curryst01"
+    pid = "thompkl01"
     print pid
 
     playergames = findAllTrainingGames(pid)

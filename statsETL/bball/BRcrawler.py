@@ -227,14 +227,15 @@ class gameCrawler(Crawler):
         team2_id = team_id_regex.search(finalscore_table_insides[1].find('a')['href']).group(0).replace('/','')
 
         data = {'_id': game_id,
-                'team1_id': team1_id,
-                'team2_id': team2_id,
-                'team1_pts': float(team1_finalscore),
-                'team2_pts': float(team2_finalscore),
-                'team1_record': team1_winloss,
-                'team2_record': team2_winloss,
-                'team1_streak': team1_streak,
-                'team2_streak': team2_streak,
+                'away_id': team1_id,
+                'home_id': team2_id,
+                'teams': [team1_id, team2_id],
+                'away_pts': float(team1_finalscore),
+                'home_pts': float(team2_finalscore),
+                'away_record': team1_winloss,
+                'home_record': team2_winloss,
+                'away_streak': team1_streak,
+                'home_streak': team2_streak,
                 'time': gametime,
                 'location': gamelocation,
                 'url': url}
@@ -272,7 +273,7 @@ class gameCrawler(Crawler):
                 if factor_stat['team_id'] == scoring_stat['team_id']:
                     scoring_stat.update(factor_stat)
                     break
-            if scoring_stat['team_id'] == data['team1_id']:
+            if scoring_stat['team_id'] == data['away_id']:
                 scoring_stat['location'] = "Away"
             else:
                 scoring_stat['location'] = "Home"

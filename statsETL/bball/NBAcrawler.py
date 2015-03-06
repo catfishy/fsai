@@ -39,9 +39,8 @@ def translatePlayerNames(player_list):
             query += '.*'
         full_matched = player_collection.find_one({'full_name' : {'$regex' : re.compile(query)}})
         nick_matched = player_collection.find_one({'nickname' : {'$regex' : re.compile(query)}})
-        if full_matched or nick_matched:
-            match_obj = full_matched or nick_matched
-            #print "%s, match: %s" % (d, match_obj)
+        if nick_matched or full_matched:
+            match_obj = nick_matched or full_matched # value nickname matches more
             player_dicts[d] = match_obj
         else:
             print "%s, no match: %s" % (d, query)
