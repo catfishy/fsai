@@ -6,3 +6,5 @@ scikit-learn==0.15.2
 gpy==0.6.0
 numpy
 matplotlib
+theano==0.6.0
+Pillow==2.7.0

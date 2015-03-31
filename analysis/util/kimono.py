@@ -4,9 +4,10 @@ import time
 
 import requests
 import simplejson as json
+from pymongo.helpers import DuplicateKeyError
 
 from statsETL.db.mongolib import *
-from statsETL.bball.NBAcrawler import updateNBARosterURLS, translatePlayerNames
+from statsETL.bball.NBAcrawler import updateNBARosterURLS, translatePlayerNames, translateTeamNames
 
 KIMONO_URL_ROOT = "https://www.kimonolabs.com/kimonoapis"
 KIMONO_URL_DATA = "https://www.kimonolabs.com/api"
@@ -15,13 +16,15 @@ KIMONO_API_TOKEN = "cr0OJmo4rEyGZ1PAWOlj3lqstCxwzugV"
 FANDUEL_DRAFT_PAGE_API = "6a0gv9bw"
 NBA_ROSTER_URLS_API = "apxs63v4"
 NBA_ROSTER_API = "26djfnzm"
+TEAMSTAT_API = "3qmi47kk"
+DEPTH_API = "6g4mw7t4"
 
 def updateNBARosters():
     """
     get all the nba roster urls,
     then crawl for the roster
     """
-    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=False)
+    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=True)
     if not results:
         return
     results = results['collection1']
@@ -33,6 +36,73 @@ def updateNBARosters():
         roster_urls[team_name] = team_roster_url
     updateNBARosterURLS(roster_urls)
 
+def getDepthChart():
+    # update rosters first
+    updateNBARosters()
+
+    results = crawlAndGetContent(DEPTH_API, crawl=True)
+    if not results:
+        raise Exception("No Depth Results")
+    results = results['collection1']
+    to_return = {}
+    for r in results[2:]:
+        row = {}
+        for k,v in r.iteritems():
+            row[k] = v['text']
+        team = row.pop('team')
+        to_return[team] = row
+
+    # translate names
+    teamnames = translateTeamNames(to_return.keys())
+    old_names = to_return.keys()
+    for k in old_names:
+        to_return[teamnames[k]] = to_return[k]
+        to_return.pop(k, None)
+
+    # try to save to database
+    x = datetime.now()
+    today = datetime(day=x.day,month=x.month,year=x.year)
+    to_save = {"time" : today, "stats": to_return}
+    try:
+        nba_conn.saveDocument(espn_depth_collection, to_save)
+    except DuplicateKeyError as e:
+        print "%s espn team stats already saved" % today
+
+    return to_return
+
+def getESPNTeamStats(crawl=True):
+    results = crawlAndGetContent(TEAMSTAT_API, crawl=crawl)
+    results = results['collection1']
+    key_translate = {k: v['text'] for k,v in results[1].iteritems()}
+    values = []
+    team_names = []
+    for row in results[2:]:
+        translated = {}
+        for k,v in row.iteritems():
+            try:
+                newval = float(v['text'])
+            except Exception as e:
+                newval = v['text']
+            translated[key_translate[k]] = newval
+        team_names.append(translated['TEAM'])
+        values.append(translated)
+    team_translate = translateTeamNames(team_names)
+    to_return = {}
+    for v in values:
+        name = v.pop('TEAM')
+        to_return[team_translate[name]] = v
+    
+    # save to database
+    if crawl:
+        x = datetime.now()
+        today = datetime(day=x.day,month=x.month,year=x.year)
+        to_save = {"time" : today, "stats": to_return}
+        try:
+            nba_conn.saveDocument(espn_stat_collection, to_save)
+        except DuplicateKeyError as e:
+            print "%s espn team stats already saved" % today
+
+    return to_return
 
 def fanDuelNBADraftAPIContent(targeturl, crawl=True):
     """
@@ -126,36 +196,6 @@ def fanDuelNBADraftAPIContent(targeturl, crawl=True):
     return data
 
 
-def translatePlayerNames(player_list):
-    '''
-    TODO: ensure match by team 
-
-    Hardcoded: 
-    - Patty -> Patrick
-    '''
-    translations = {"Patty": "Patrick"}
-
-    player_dicts = {}
-    for d in player_list:
-        name_parts = [x.strip() for x in d.split(' ') if x.strip()]
-        query = ''
-        for p in name_parts:
-            if p in translations:
-                p = translations[p]
-            query += '.*%s' % p.replace('.','.*')
-        if query:
-            query += '.*'
-        full_matched = player_collection.find_one({'full_name' : {'$regex' : re.compile(query)}})
-        nick_matched = player_collection.find_one({'nickname' : {'$regex' : re.compile(query)}})
-        if full_matched or nick_matched:
-            match_obj = full_matched or nick_matched
-            #print "%s, match: %s" % (d, match_obj)
-            player_dicts[d] = match_obj
-        else:
-            print "%s, no match: %s" % (d, query)
-    return player_dicts
-
-
 def parseFanDuelDraftURL(url):
     '''
     url = "https://www.fanduel.com/e/Game/11618?tableId=10531011&fromLobby=true"
@@ -241,5 +281,5 @@ def crawlAndGetContent(kimono_api_id, crawl=True, retries=3):
 
 if __name__ == "__main__":
     #data = fanDuelNBADraftAPIContent()
-    data = updateNBARosters()
-    print data
+    #print getESPNTeamStats(crawl=True)
+    getDepthChart()

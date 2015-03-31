@@ -106,6 +106,9 @@ player_collection = nba_conn.getCollection("players")
 upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
 future_collection = nba_conn.getCollection("future") # for future nba games
 projection_collection = nba_conn.getCollection("projections") # for modeling projections by player
+espn_stat_collection = nba_conn.getCollection("espnstats") # for espn team stats
+espn_player_stat_collection = nba_conn.getCollection("espnplayerstats")
+espn_depth_collection = nba_conn.getCollection("depthcharts")
 
 # ensure indices
 nba_conn.ensureIndex(team_collection, [("url", 1)])
@@ -118,4 +121,7 @@ nba_conn.ensureIndex(game_collection, [('url',1)])
 nba_conn.ensureIndex(team_game_collection, [("team_id", 1),("game_id", 1)], unique=True)
 nba_conn.ensureIndex(player_game_collection, [("player_id", 1),("game_id", 1)], unique=True)
 nba_conn.ensureIndex(projection_collection, [("player_id", 1),("time", 1)], unique=True)
+nba_conn.ensureIndex(espn_stat_collection, [('time', 1)], unique=True)
+nba_conn.ensureIndex(espn_player_stat_collection, [("player_id", 1),('time', 1)], unique=True)
+nba_conn.ensureIndex(espn_depth_collection, [('time', 1)], unique=True)
 

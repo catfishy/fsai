@@ -189,14 +189,19 @@ class Crawler(object):
             return False
         # get content
         try:
-            init_response = requests.get(url, timeout=10)
-            init_content = init_response.content
-            init_soup = BeautifulSoup(init_content)
+            init_soup = self.getContent(url)
             self.visited.add(url)
         except Exception as e:
             self.logger.info("%s no content: %s" % (url,e))
             return False
         return init_soup
+
+    def getContent(self, url):
+        init_response = requests.get(url, timeout=10)
+        init_content = init_response.content
+        init_soup = BeautifulSoup(init_content)
+        return init_soup
+
 
     def checkAdd(self, url):
         if url in self.added or url in self.visited:

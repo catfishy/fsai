@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta
+from collections import defaultdict
 import re
-
+import csv
+import StringIO
 
 import requests
 from bs4 import BeautifulSoup, element
+from pymongo.helpers import DuplicateKeyError
 
 from statsETL.db.mongolib import *
 from statsETL.util.crawler import *
@@ -21,11 +24,75 @@ def updateNBARosterURLS(roster_urls):
     rcrawl = rosterCrawler(roster_urls)
     rcrawl.run()
 
+
+def crawlNBATrackingStats():
+    pullup_address = ("pullup", "http://stats.nba.com/js/data/sportvu/pullUpShootData.js")
+    drives_address = ("drives", "http://stats.nba.com/js/data/sportvu/drivesData.js")
+    defense_address = ("defense", "http://stats.nba.com/js/data/sportvu/defenseData.js")
+    passing_address = ("passing", "http://stats.nba.com/js/data/sportvu/passingData.js")
+    touches_address = ("touches", "http://stats.nba.com/js/data/sportvu/touchesData.js")
+    speed_address = ("speed", "http://stats.nba.com/js/data/sportvu/speedData.js")
+    rebounding_address = ("rebounding", "http://stats.nba.com/js/data/sportvu/reboundingData.js")
+    catchshoot_address = ("catchshoot", "http://stats.nba.com/js/data/sportvu/catchShootData.js")
+    shooting_address = ("shooting", "http://stats.nba.com/js/data/sportvu/shootingData.js")
+    addresses = [pullup_address, drives_address, defense_address, passing_address, 
+                 touches_address, speed_address, rebounding_address, catchshoot_address,
+                 shooting_address]
+    player_stats = defaultdict(dict)
+    for name, url in addresses:
+        response = requests.get(url, timeout=10)
+        content = response.content
+        content = re.sub("[\{\}]","", content)
+        content = re.sub("[\[\]]", "\n", content)
+        content = re.sub("\"rowSet\":\n", "", content)
+        content = re.sub(";", ",", content)
+        rows = content.split('\n')
+        rows = rows[2:]
+        reader = csv.DictReader(rows)
+        for row in reader:
+            # find player id
+            playername = row['PLAYER']
+            if playername:
+                # pop keys
+                row.pop('FIRST_NAME', None)
+                row.pop('LAST_NAME', None)
+                row.pop('PLAYER', None)
+                row.pop('PLAYER_ID', None)
+                # change 'null' to None, or convert to float
+                for k,v in row.iteritems():
+                    try:
+                        row[k] = float(v)
+                    except Exception as e:
+                        row[k] = None
+                player_stats[playername].update(row)
+
+    # match for player ids
+    pids = translatePlayerNames(player_stats.keys())
+    for name, prow in pids.iteritems():
+        player_stats[name]['player_id'] = prow['_id']
+
+    # save
+    x = datetime.now()
+    today = datetime(day=x.day,month=x.month,year=x.year)
+    for playername, to_save in player_stats.iteritems():
+        to_save['time'] = today
+        try:
+            nba_conn.saveDocument(espn_player_stat_collection, to_save)
+        except DuplicateKeyError as e:
+            print "%s espn player stats already saved" % today
+
+
+
 def translatePlayerNames(player_list):
     '''
     Includes Hardcoded translations
     '''
-    translations = {"Patty": "Patrick"}
+    translations = {"Patty": "Patrick",
+                    "JJ": "J.J.",
+                    "KJ": "K.J.",
+                    "CJ": "C.J.",
+                    "TJ": "T.J.",
+                    "PJ": "P.J."}
 
     player_dicts = {}
     for d in player_list:
@@ -46,6 +113,28 @@ def translatePlayerNames(player_list):
             print "%s, no match: %s" % (d, query)
     return player_dicts
 
+def translateTeamNames(team_list):
+    '''
+    Includes hardcoded translatiions
+    '''
+    translations = {"LA": "Los Angeles"}
+
+    team_dicts = {}
+    for t in team_list:
+        name_parts = [x.strip() for x in t.split(' ') if x.strip()]
+        query = ''
+        for p in name_parts:
+            if p in translations:
+                p = translations[p]
+            query += '.*%s' % p.replace('.','.*')
+        if query:
+            query += '.*'
+        matched = team_collection.find_one({'name' : {'$regex' : re.compile(query)}})
+        if matched:
+            team_dicts[t] = matched["_id"]
+        else:
+            print "%s, no match %s" % (t, query)
+    return team_dicts
 
 class rosterCrawler(Crawler):
 
@@ -191,8 +280,10 @@ class upcomingGameCrawler(Crawler):
         hourminute = time_parts[0].split(':')
         ampm = time_parts[1]
         hour = int(hourminute[0])
-        if 'pm' in ampm:
+        if 'pm' in ampm and hour != 12:
             hour += 12
+        if 'am' in ampm and hour == 12:
+            hour = 0
         minute = int(hourminute[1])
         gametime = datetime(year=self.date.year, month=self.date.month, day=self.date.day, hour=hour, minute=minute)
         return gametime
@@ -203,5 +294,5 @@ if __name__=="__main__":
     gl_crawl = upcomingGameCrawler(date=[today])
     gl_crawl.crawlPage()
     '''
-
+    crawlNBATrackingStats()
 

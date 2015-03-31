@@ -81,6 +81,116 @@ def modelPlayersInUpcomingGames(logger, days_ahead=3, poolsize=4):
         logger.info("%s: %s players projected, %s invalid" % (matched_game['_id'], len(stat_projections), len(invalid_players)))
     return stat_projections
 
+
+def fantasySalaryEfficiency(game_id, logger, window=5, pt_limit=24, roster_pt_limit=328, crawl=True):
+    new_url = createFanDuelDraftURL(game_id)
+
+    logger.info("Fanduel URL: %s" % new_url)
+
+    kimono_info = fanDuelNBADraftAPIContent(new_url, crawl=crawl)
+    kimono_info = mergeFanduelDB(game_id, kimono_info)
+    
+    # build players by game lookup
+    players_by_game = defaultdict(list)
+    for pid, game in kimono_info['player_games'].iteritems():
+        players_by_game[game].append(pid)
+    valid_game_ids = set(kimono_info['player_games'].values())
+
+    # kimono invalid players, adjusted by manual in/validation
+    invalid_players = list(set(kimono_info['invalids'] + kimono_info['manual_invalids']))
+    for pid in kimono_info['manual_valids']:
+        if pid in invalid_players:
+            invalid_players.pop(pid)
+
+    logger.info("Fanduel Invalids: %s" % invalid_players)
+    logger.info("Fanduel GTD: %s" % kimono_info['gtds'])
+
+    # match up game ids with upcoming games
+    upcoming_by_id = {} 
+    player_teams = {}
+    for gid in valid_game_ids:
+        teams = gid.split('@')
+        away = teams[0]
+        home = teams[1]
+        matched_game = matchUpcomingGame(home, away)
+
+        logger.info("Matched %s with %s" % (gid, matched_game))
+
+        upcoming_by_id[gid] = matched_game
+
+        # find players in game
+        game_pids = players_by_game[gid]
+        home_name = matched_game['home_team_name']
+        away_name = matched_game['away_team_name']
+        avai_players = availablePlayers(matched_game)
+        home_players = avai_players[home_name]
+        away_players = avai_players[away_name]
+
+        for p in game_pids:
+            if p in home_players:
+                player_teams[p] = home_name
+            elif p in away_players:
+                player_teams[p] = away_name
+            else:
+                logger.info("%s not on %s or %s rosters" % (p,home_name,away_name))
+                invalid_players.append(p)
+    kimono_info['player_teams'] = player_teams
+    kimono_info['teams'] = [v['teams'] for k,v in upcoming_by_id.iteritems()]
+
+    logger.info("Invalids from Crawl: %s, %s" % (len(invalid_players), invalid_players))
+
+    # get avg fantasy pts over window
+    weights = np.arange(1.0, float(window) + 0.01, 0.1)[:window]
+    fppg = lastTenGameFantasyAvg(kimono_info['players'], datetime.now(), kimono_info['point_values'], window=window, weights=weights)
+
+    # get variance in fantasy pts over window
+    fppg_var = lastTenGameFantasyVariance(kimono_info['players'], datetime.now(), kimono_info['point_values'], window=window)
+
+    # divide by salary
+    perdollar = {}
+    for pid, fp in fppg.iteritems():
+        if fp > pt_limit and pid not in kimono_info['invalids']:
+            #print "%s: %s, %s" % (pid, fp, float(kimono_info['player_salaries'][pid]))
+            perdollar[pid] = fp / float(kimono_info['player_salaries'][pid])
+
+    sorted_perdollar = sorted(perdollar.items(), reverse=True, key = lambda x: x[1])
+    by_position = defaultdict(list)
+    for pos in list(set(kimono_info['player_positions'].values())):
+        print "\nPOS: %s" % pos
+
+        for a,b in sorted_perdollar:
+            if kimono_info['player_positions'][a] == pos:
+                by_position[pos].append(a)
+                print "%s: %s (%s +/- %s, $%s)" % (player_collection.find_one({"_id": a})['nickname'], b, fppg[a], np.sqrt(fppg_var[a]), kimono_info['player_salaries'][a])
+
+    print '\n'
+
+    pg_pairs = itertools.combinations(by_position['pg'], 2)
+    sg_pairs = itertools.combinations(by_position['sg'], 2)
+    sf_pairs = itertools.combinations(by_position['sf'], 2)
+    pf_pairs = itertools.combinations(by_position['pf'], 2)
+    c_pairs = itertools.combinations(by_position['c'], 1)
+
+    potentials = itertools.product(*[pg_pairs, sg_pairs, sf_pairs, pf_pairs, c_pairs])
+    budget = int(kimono_info['budget'])
+    for p in potentials:
+        # flatten
+        flat = [pid for _ in p for pid in _]
+        price = sum([kimono_info['player_salaries'][a] for a in flat])
+        # check price
+        if price > budget or price < (budget - 300):
+            continue
+        pts = sum([fppg[a] for a in flat])
+        if pts <= roster_pt_limit:
+            continue
+        variance = sum([fppg_var[a] for a in flat])
+        print "Roster: %s" % ([player_collection.find_one({"_id": a})['nickname'] for a in flat],)
+        print "Pts: %s" % (pts)
+        print "StdDev: %s" % (np.sqrt(variance))
+        print "Salary: %s" % (price)
+        print "\n"
+
+
 def analyzeFanDuelGame(game_id, logger, crawl=True):
     """
     create new game row in db
@@ -140,6 +250,7 @@ def analyzeFanDuelGame(game_id, logger, crawl=True):
                 logger.info("%s not on %s or %s rosters" % (p,home_name,away_name))
                 invalid_players.append(p)
     kimono_info['player_teams'] = player_teams
+    kimono_info['teams'] = [v['teams'] for k,v in upcoming_by_id.iteritems()]
 
     logger.info("Invalids from Crawl: %s, %s" % (len(invalid_players), invalid_players))
 
@@ -237,6 +348,21 @@ def getPreviousProjection(pid, matched_game):
         return avgs
     return None
 
+
+def compareMatchupEfficiencies(matchups):
+    eff = {}
+    team_stats = getESPNTeamStats(crawl=True)
+    for match in matchups:
+        team_1 = match[0]
+        team_2 = match[1]
+        one_off = team_stats[team_1]['OFF EFF']
+        two_def = team_stats[team_1]['DEF EFF']
+        one_off = team_stats[team_2]['OFF EFF']
+        two_def = team_stats[team_2]['DEF EFF']
+        eff[team_1] = (one_off, two_def)
+        eff[team_2] = (two_off, one_def)
+    return eff
+
 def graphUpcomingGames(game_id):
     upcoming = upcoming_collection.find_one({"_id": game_id})
     players = list(set(upcoming['players']) - set(upcoming['invalids']))
@@ -247,8 +373,11 @@ def graphUpcomingGames(game_id):
     pt_variances = upcoming['point_variances']
     pt_trends = upcoming['point_trends']
     ts = upcoming['update_time']
+    teams = upcoming['teams']
     avg_pts = lastTenGameFantasyAvg(players, ts, upcoming['point_values'])
 
+    matchup_eff = compareMatchupEfficiencies(teams)
+    print matchup_eff
     min_splits = teamPositionMinuteSplits(players, ts, positions)
 
     proj_by_position = defaultdict(dict)
@@ -317,36 +446,54 @@ def graphUpcomingGames(game_id):
 
     plt.show(block=True)
     
-def lastTenGameFantasyAvg(pids, ts, point_vals):
-    # calc stats
-    stats = {}
+
+def lastTenGameFantasyVariance(pids, ts, point_vals, window=10):
+    variances = {}
     for pid in pids:
         pstats = defaultdict(list)
         results = player_game_collection.find({"player_id": pid,
                                                "game_time": {"$lt": ts}}, 
                                                sort=[("game_time",-1)], 
-                                               limit=10)
+                                               limit=window)
         results = list(results)
+        fppg = []
         for row in results:
-            for k,v in row.iteritems():
-                pstats[k].append(v)
-        avgs = {}
-        for k in point_vals.keys():
-            values = [_ for _ in pstats[k] if _ is not None]
-            if len(values) == 0:
-                avgs[k] = 0.0 # assuming that no point values for percentages
-            else:
-                avgs[k] = np.mean(values)
-        stats[pid] = avgs
-    # calc points
-    fantasypts = {}
-    for pid, pstat in stats.iteritems():
-        pts = 0.0
-        for k, w in point_vals.iteritems():
-            stat_mean = pstat[k]
-            pts += w*float(stat_mean)
-        fantasypts[pid] = pts
-    return fantasypts
+            ff = 0.0
+            for k, w in point_vals.iteritems():
+                val = row.get(k,0.0)
+                ff += w * float(val)
+            fppg.append(ff)
+        # calculate variance
+        p_var = np.var(fppg)
+        variances[pid] = p_var
+    return variances
+
+def lastTenGameFantasyAvg(pids, ts, point_vals, window=10, weights=None):
+    if weights is None:
+        weights = [1] * window
+    else:
+        if len(weights) != window:
+            raise Exception("weight vector length not equal to window size")
+    avgs = {}
+    for pid in pids:
+        pstats = defaultdict(list)
+        results = player_game_collection.find({"player_id": pid,
+                                               "game_time": {"$lt": ts}}, 
+                                               sort=[("game_time",-1)], 
+                                               limit=window)
+        results = list(results)
+        fppg = []
+        for row in results:
+            ff = 0.0
+            for k, w in point_vals.iteritems():
+                val = row.get(k,0.0)
+                ff += w * float(val)
+            fppg.append(ff)
+        # calculate average
+        p_weights = weights[-len(fppg):]
+        p_avg = np.average(fppg, weights=p_weights)
+        avgs[pid] = p_avg
+    return avgs
 
 def teamPositionMinuteSplits(pids, ts, positions):
     # find all the teams:
@@ -418,8 +565,8 @@ def compareHistoricalGame(game_id, point_values=None, graph=False):
     playerstats = player_game_collection.find({"game_id": game_id})
 
     # mock matched game
-    home_id = game_row['team2_id']
-    away_id = game_row['team1_id']
+    home_id = game_row['home_id']
+    away_id = game_row['away_id']
     home_row = team_collection.find_one({"_id": home_id})
     away_row = team_collection.find_one({"_id": away_id})
     if not home_row:
@@ -439,42 +586,64 @@ def compareHistoricalGame(game_id, point_values=None, graph=False):
 
     data = {}
     stat_projections = {}
+    to_project = []
     for pstat in playerstats:
         pid = pstat['player_id']
         prev_proj = getPreviousProjection(pid, matched_game)
         if not prev_proj:
             print "No projections found for %s" % pid
-            pid, prev_proj = trainAndProjectPlayer((pid, matched_game))
-        if prev_proj:
-            stat_projections[pid] = prev_proj
-            # calculate player fantasy points
-            actual_pts = sum([v*float(pstat.get(k,0.0)) for k,v in point_values.iteritems()])
-            data[pid] = {'actual':actual_pts}
+            to_project.append((pid, matched_game))
         else:
-            print "Failed to project for %s" % pid
-            continue
+            stat_projections[pid] = prev_proj
+        # calculate player fantasy points
+        actual_pts = sum([v*float(pstat.get(k,0.0)) for k,v in point_values.iteritems()])
+        data[pid] = {'actual':actual_pts}
+
+    # in parallel, train and project players that need it
+    invalid = []
+    poolsize = 4
+    args = iter(to_project)
+    pool = mp.Pool(poolsize)
+    pool_results = pool.imap_unordered(trainAndProjectPlayer, args)
+    pool.close()
+    pool.join()
+    for pid,pid_results in pool_results:
+        if pid_results is None:
+            print "Failed to project %s" % pid
+            invalid.append(pid)
+        else:
+            stat_projections[pid] = pid_results
+
+    # remove invalids
+    for i in invalid:
+        data.pop(i)
+
+    # get 10 game averages
+    avgs = lastTenGameFantasyAvg(stat_projections.keys(), game_row['time'], point_values)
 
     # extract usg% and mp
     usg = {}
-    mp = {}
+    minp = {}
     for pid, proj in stat_projections.iteritems():
         usg[pid] = stat_projections[pid]['USG%']
-        mp[pid] = stat_projections[pid]['MP']
+        minp[pid] = stat_projections[pid]['MP']
 
     # calculate points
     point_projections, point_variances, point_trends = getFantasyPoints(stat_projections, point_values)
     for pid in point_projections.keys():
+        if point_projections[pid] is None:
+            continue
         data[pid]['proj_mean'] = point_projections[pid]
         data[pid]['proj_var'] = math.sqrt(point_variances[pid]) * 2
         data[pid]['proj_trend'] = point_trends[pid]
-        data[pid]['mp'] = usg[pid][0]
-        data[pid]['mp_var'] = math.sqrt(usg[pid][1]) * 2
-        data[pid]['usg'] = mp[pid][0]
-        data[pid]['usg_var'] = math.sqrt(mp[pid][1]) * 2
+        data[pid]['usg'] = usg[pid][0]
+        data[pid]['usg_var'] = math.sqrt(usg[pid][1]) * 2
+        data[pid]['mp'] = minp[pid][0]
+        data[pid]['mp_var'] = math.sqrt(minp[pid][1]) * 2
 
     if graph:
         # sort keys by projected points
-        sorted_keys = sorted(data.keys(), key=lambda x: data[x]['proj_mean'])
+        sorted_keys = sorted(data.keys(), key=lambda x: data[x]['actual'])
         mean_graph = []
         var_graph = []
         real_graph = []
@@ -483,6 +652,7 @@ def compareHistoricalGame(game_id, point_values=None, graph=False):
         usg_var = []
         mp_graph = []
         mp_var = []
+        avg_graph = []
         for k in sorted_keys:
             mean_graph.append(data[k]['proj_mean'])
             var_graph.append(data[k]['proj_var'])
@@ -492,6 +662,11 @@ def compareHistoricalGame(game_id, point_values=None, graph=False):
             usg_var.append(data[k]['usg_var'])
             mp_graph.append(data[k]['mp'])
             mp_var.append(data[k]['mp_var'])
+            avg_graph.append(avgs[k])
+
+        # cap trend at -30
+        trend_graph = [max(_,-30.0) for _ in trend_graph]
+
         fig = plt.figure()
         x = range(len(mean_graph))
         p2 = plt.errorbar(x, mean_graph, yerr=var_graph, label='proj')
@@ -502,6 +677,7 @@ def compareHistoricalGame(game_id, point_values=None, graph=False):
         p5 = plt.plot(usg_graph, marker='o', label='usg')
         p6 = plt.plot(mp_graph, marker='o', label='mp')
         p7 = plt.plot(x, [0.0]*len(x), label='zero')
+        p8 = plt.plot(avg_graph, marker='o', label='avg')
         fig.suptitle(game_id, fontsize=20)
         plt.legend(loc='best', shadow=True)
         plt.show(block=True)
@@ -524,7 +700,7 @@ def trainAndProjectPlayer(args):
 
     # get player models
     try:
-        player_models = trainModelsForPlayer(pid)
+        player_models = trainModelsForPlayer(pid, time=game_time)
     except Exception as e:
         print "Error training models for %s: %s" % (pid, e)
         print traceback.print_exc()
@@ -606,38 +782,39 @@ def makeProjection(new_features, core_processors, core_models, trend_processors,
         print traceback.print_exc()
         raise e
 
-    # modulate core by each trend projection
-    # DEFAULTING TO USING PLAYER FEATURES AS CORE
-    core_mean, core_var = core_projections['plf']
+    zero_var_replace = 0.01
 
-    # mix projections together, weighted by variance
-    mods = trend_projections.values()
-    mod_means = np.array([_[0] for _ in mods])
-    mod_vars = np.array([_[1] for _ in mods]) 
-    # deal with zeros
-    zero_replace = 0.00001
-    non_zero_vars = mod_vars[mod_vars > 0.0]
-    if len(non_zero_vars) > 0:
-        zero_replace = min(zero_replace, min(non_zero_vars))
-    mod_vars[mod_vars == 0.0] = zero_replace
+    # calculate core mean and var
+    cores = core_projections.values()
+    core_means = np.array([_[0] for _ in cores])
+    core_vars = np.array([_[1] for _ in cores])
+    # mix, weighing by 1/var
+    core_weights = np.array([1.0/max(zero_var_replace,_) for _ in core_vars])
+    core_weights = core_weights / sum(core_weights)
+    core_mean = np.average(core_means, weights=core_weights)
+    core_weights_2 = [_**2 for _ in core_weights]
+    core_var = np.inner(core_weights_2, core_vars)
+    #core_var = ((1.0/len(core_vars))**2) * core_var
 
-    #print "core_mean: %s, core_var: %s" % (core_mean,core_var)
-    #print "modmeans: %s, modvars: %s" % (mod_means, mod_vars)
-
-    mod_weights = np.array([1.0/_ for _ in mod_vars])
-    mod_weights = mod_weights / sum(mod_weights)
-    weighted_mods_avg = np.average(mod_means, weights=mod_weights)
-    avg = weighted_mods_avg * core_mean
-    print "core: %s, mod: %s, avg: %s" % (core_mean,weighted_mods_avg,avg)
-
-    # calculate Var(Z)
-    w_2 = [_**2 for _ in mod_weights]
-    mod_variance = np.inner(w_2,mod_vars)
-    mod_variance_avg = ((1.0/len(mod_vars))**2) * mod_variance
-    # Var(XY) = (E(X)^2)*(Var(Y)) + (E(Y)^2)*(Var(X)) + Var(X)*Var(Y)
-    total_variance = (core_mean**2)*(mod_variance_avg) + (weighted_mods_avg**2)*(core_var) + (mod_variance_avg*core_var)
-
-    return (avg, total_variance, weighted_mods_avg, mod_variance_avg)
+    if trend_projections:
+        # calculate trend mean and var
+        mods = trend_projections.values()
+        mod_means = np.array([_[0] for _ in mods])
+        mod_vars = np.array([_[1] for _ in mods]) 
+        # mix, weight by 1/var
+        mod_weights = np.array([1.0/max(zero_var_replace,_) for _ in mod_vars])
+        mod_weights = mod_weights / sum(mod_weights)
+        mod_mean = np.average(mod_means, weights=mod_weights)
+        mod_weights_2 = [_**2 for _ in mod_weights]
+        mod_var = np.inner(mod_weights_2, mod_vars)
+        #mod_var = ((1.0/len(mod_vars))**2) * mod_var
+    else:
+        mod_mean = 1.0
+        mod_var = 0.0
+    
+    to_return = (core_mean, core_var, mod_mean, mod_var)
+    print "core: %s, core_var: %s, trend: %s, trend_var: %s" % to_return
+    return to_return
 
 def prepUpdate(game_id, kimono_info):
     '''
@@ -705,9 +882,9 @@ def teamInfo(team_name):
     return result
 
 
-def trainModelsForPlayer(pid):
+def trainModelsForPlayer(pid, time=None):
     to_return = {}
-    training_games = findAllTrainingGames(pid, limit=40)
+    training_games = findAllTrainingGames(pid, limit=40, time=time)
     for y_key in Y_KEYS:
         core_processors, core_models = trainCoreModels(pid, training_games, y_key, weigh_recent=True, test=False, plot=False)
         trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, weigh_recent=True, test=False, plot=False)
@@ -747,5 +924,5 @@ def addPlayerToInvalid(game_id, player_id):
     nba_conn.saveDocument(upcoming_collection, row)
 
 if __name__ == "__main__":
-    #comps = compareHistoricalGame("201502030POR", graph=True)
-    graphUpcomingGames("11732?tableId=10901317")
+    comps = compareHistoricalGame("201502270CHI", graph=True)
+    #graphUpcomingGames("11732?tableId=10901317")

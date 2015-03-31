@@ -27,13 +27,13 @@ from analysis.bball.playerAnalysis import *
 from statsETL.db.mongolib import *
 
 
-TREND_FEATURE_FNS = [('faf', 'runFacingPlayerFeatures'),
-                     ('if','runIntensityFeatures'), 
-                     ('phf','runPhysicalFeatures'), 
-                     ('oef','runOppositionEarnedFeatures'), 
-                     ('oaf','runOppositionAllowedFeatures'), 
-                     ('opf','runOppositionPlayerFeatures')]
-CORE_FEATURE_FNS = [('plf','runPlayerFeatures')]
+TREND_FEATURE_FNS = []
+CORE_FEATURE_FNS = [('plf','runPlayerFeatures'),
+                    ('oef','runOppositionEarnedFeatures'),
+                    ('if','runIntensityFeatures'), 
+                    ('phf','runPhysicalFeatures'),
+                    ('oaf','runOppositionAllowedFeatures'), 
+                    ('opf','runOppositionPlayerFeatures')]
 UNUSED_FNS = []
 
 class DataPreprocessor(object):
@@ -46,7 +46,8 @@ class DataPreprocessor(object):
     """
 
     def __init__(self, timestamps, cont_labels, cont_samples, cat_labels, cat_samples, Y, 
-                 cat_kernel_splits=None, weigh_recent=False, weigh_outliers=False):
+                 cat_kernel_splits=None, weigh_recent=False, weigh_outliers=False, 
+                 clamp=None):
         self.cont_labels = cont_labels
         self.cat_labels = cat_labels
         self.cont_samples = np.array(cont_samples)
@@ -68,10 +69,14 @@ class DataPreprocessor(object):
         if len(self.cont_samples) < 2 and len(self.cat_samples) < 2:
             raise Exception("Need more than one data point")
 
+        self.clamp = clamp if clamp else (-1,1)
+        self.clamped = True if clamp else False
+
         self.labels = None
         self.samples = None
         self.scaler = StandardScaler()
-        self.minmax = MinMaxScaler(feature_range=(-1,1))
+        self.minmax = MinMaxScaler(feature_range=self.clamp)
+        self.cat_minmax = MinMaxScaler(feature_range=self.clamp)
         self.imputer = Imputer()
 
         # sort and normalize
@@ -79,7 +84,7 @@ class DataPreprocessor(object):
         self.runningAverage = None
         self.sortSamples()
         self.findBadContCols()
-        self.normalizeContSamples()
+        self.normalizeSamples()
 
         # calculate different target values
         self.trendY = self.calcTrendY(window_size=15)
@@ -114,11 +119,12 @@ class DataPreprocessor(object):
             #to_add_runningAvg.append(self.runningAverage[-top_2:])
 
         if outliers:
-            top = 5
             by_value = defaultdict(list)
             for k,v in enumerate(self.Y):
                 by_value[abs(v)].append(k)
-            highest_values = sorted(by_value.items(), key=lambda x: x[0], reverse=True)[:top]
+            highest_values = sorted(by_value.items(), key=lambda x: x[0], reverse=True)
+            top = max(1,int(len(highest_values) * 0.2))
+            highest_values = highest_values[:top]
             indices = np.array([c for k,v in highest_values for c in v])
             to_add_cont.append(self.cont_samples[indices])
             to_add_cat.append(self.cat_samples[indices])
@@ -149,15 +155,21 @@ class DataPreprocessor(object):
         if self.runningAverage is not None:
             self.runningAverage = np.array([self.runningAverage[indices[i]] for i in range(len(self.timestamps))])
 
-    def normalizeContSamples(self):  
+    def normalizeSamples(self):  
         samples = np.array(self.cont_samples)
         samples = self.imputer.fit_transform(samples)
         samples = self.minmax.fit_transform(samples)
-        samples = self.scaler.fit_transform(samples)
+        if not self.clamped:
+            samples = self.scaler.fit_transform(samples)
         self.cont_samples = samples
         # remove bad columns from labels
         for bad_col in sorted(self.bad_cont_cols,reverse=True):
             self.cont_labels = scipy.delete(self.cont_labels, bad_col, 0)
+
+        # normalize cat samples
+        cat_samples = np.array(self.cat_samples)
+        cat_samples = self.cat_minmax.fit_transform(cat_samples)
+        self.cat_samples = cat_samples
 
     def findBadContCols(self):
         # find features that would be removed after imputing
@@ -182,7 +194,7 @@ class DataPreprocessor(object):
             for i in range(len(self.cont_labels)):
                 name = self.cont_labels[i]
                 name = name.replace('%','_percent')
-                cont_kernel = GPy.kern._src.rbf.RBF(1, name=name)
+                cont_kernel = GPy.kern._src.rbf.RBF(1, active_dims=[i], name=name)
                 kernel_pieces.append(cont_kernel)
             
             #cont_kernel = GPy.kern.Matern52(len(self.cont_labels))
@@ -196,19 +208,22 @@ class DataPreprocessor(object):
             kernel_sizes.append(cat_size)
         else:
             kernel_sizes = self.cat_kernel_splits
+        start_i = 0
         for size in kernel_sizes:
             if size > 0:
-                cat_kernel = GPy.kern._src.rbf.RBF(size, ARD=True)
+                cat_kernel = GPy.kern._src.rbf.RBF(size, active_dims=range(start_i, start_i + size), ARD=True)
+                start_i += size
                 kernel_pieces.append(cat_kernel)
 
         # make into one kernel
+        kernel = None
         for p in kernel_pieces:
             if kernel is None:
                 kernel = p
             else:
-                kernel = kernel.add(p)
-
+                kernel = kernel + p
         return kernel
+        
 
     def getAllSamples(self):
         """
@@ -246,7 +261,9 @@ class DataPreprocessor(object):
                 future_values = in_vals[i:i+length_needed]
                 prev_values = np.concatenate((prev_values,future_values))
             prev_avg = np.mean(prev_values)
-            if prev_avg == 0.0:
+            if prev_avg == 0.0 and y > 0.0:
+                ratios.append(2.0) # DEFAULT TO 2.0 IF INF
+            elif prev_avg == 0.0 and y == 0.0:
                 ratios.append(1.0)
             else:
                 ratios.append(y/prev_avg)
@@ -271,8 +288,13 @@ class DataPreprocessor(object):
             samples = np.array(cont_sample)
             samples = self.imputer.transform(samples)
             samples = self.minmax.transform(samples)
-            samples = self.scaler.transform(samples)
+            if not self.clamped:
+                samples = self.scaler.transform(samples)
             cont_sample = samples[0]
+        if cat_sample:
+            samples = np.array(cat_sample)
+            samples = self.cat_minmax.transform(samples)
+            cat_sample = samples[0]
         whole_sample = np.concatenate((cont_sample, cat_sample), axis=0)
         return whole_sample
 
@@ -453,7 +475,7 @@ class LinearRegressionValidationFramework(CrossValidationFramework):
 
 class GPCrossValidationFramework(CrossValidationFramework):
 
-    def __init__(self, kernel, X, Y, test_size=0.2, restarts=10):
+    def __init__(self, kernel, X, Y, test_size=0.2, restarts=5):
         super(GPCrossValidationFramework, self).__init__(X, Y, test_size)
         self.restarts = restarts
         self.kernel = kernel
@@ -470,7 +492,7 @@ class GPCrossValidationFramework(CrossValidationFramework):
         v = pickle.load(open(model_file))
         self.model = GPy.models.GPRegression.setstate(v)
 
-    def train(self, zip_data=None, weigh_recent=True):
+    def train(self, zip_data=None):
         self.trained = False
 
         if zip_data:
@@ -497,11 +519,16 @@ class GPCrossValidationFramework(CrossValidationFramework):
         # load the train data, randomize, constrain, then optimize
         self.model = GPy.models.GPRegression(
             self.X_train, self.Y_train, self.kernel)
-        self.model.randomize()
         #self.model.ensure_default_constraints()
         #self.model.optimize_restarts(
         #    num_restarts=self.restarts, robust=True, parallel=True, num_processes=None)
-        self.model.optimize('bfgs')
+        #self.model.constrain_positive('') # '' is a regex matching all parameter names
+        self.model.unconstrain()
+        #self.model.randomize()
+        self.model['.*var'].constrain_positive()
+        self.model['.*lengthscale'].constrain_positive()
+        self.model.Gaussian_noise.constrain_positive()
+        self.model.optimize()
         self.trained = True
 
     def test(self, graph=True):
@@ -574,8 +601,8 @@ def getProcessor(pid, games, fn_name, y_key, weigh_recent=False, weigh_outliers=
             cat_labels, cat_features, cont_labels, cont_features, cat_splits = getattr(fext, fn_name)()
         except Exception as e:
             print "Exception running %s for pid %s, game %s: %s" % (fn_name, pid, gid, e)
+            print traceback.print_exc()
             continue
-
 
         ts = fext.timestamp()
         y = fext.getY(y_key)
@@ -583,13 +610,14 @@ def getProcessor(pid, games, fn_name, y_key, weigh_recent=False, weigh_outliers=
         cat_X.append(cat_features)
         cont_X.append(cont_features)
         Y.append(y)
+
     # normalize the data
     proc = DataPreprocessor(ts_X, cont_labels, cont_X, cat_labels, cat_X, Y, 
                             cat_kernel_splits=cat_splits, weigh_recent=weigh_recent, 
                             weigh_outliers=weigh_outliers)
     return proc
 
-def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False, plot=False):
+def trainTrendModels(pid, training_games, y_key, weigh_recent=False, weigh_outliers=True, test=False, plot=False):
     processors = {}
     models = {}
 
@@ -599,7 +627,7 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
         test_size = 0.0
 
     for name, f in TREND_FEATURE_FNS:
-        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent, weigh_outliers=True)
+        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent, weigh_outliers=weigh_outliers)
     for name,proc in processors.iteritems():
         X = proc.getAllSamples()
         trendY = proc.getTrendY()
@@ -620,22 +648,24 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
         # for gp
         kernel = proc.getKernel()
         framework = GPCrossValidationFramework(kernel, X, trendY, test_size=test_size, restarts=10)
-        framework.train(zip_data=zipped_ra, weigh_recent=weigh_recent)
-
+        framework.train(zip_data=zipped_ra)
+        print framework.model
         # save the model
         models[name] = framework
 
         if test:
-
-            means, variances = framework.model.predict(framework.X_test)
-            predicted_trend = [_[0] for _ in means]
-            predicted_vars = [_[0] for _ in variances]
+            predicted_trend = []
+            predicted_vars = []
+            for x_test in framework.X_test:
+                means, variances = framework.model.predict(np.array([x_test]))
+                predicted_trend.append(means[0][0])
+                predicted_vars.append(math.sqrt(variances[0][0]))
 
             actual_trend = [_[0] for _ in framework.Y_test]
             ra = framework.data_test
             avgs = [_[0] for _ in ra]
             actual = [_[1] for _ in ra]
-            predicted = [avgs[i]*_ for i,_ in enumerate(predicted_trend)]
+            #predicted = [avgs[i]*_ for i,_ in enumerate(predicted_trend)]
             corrs = np.corrcoef(actual_trend, predicted_trend)
 
             print "%s for %s" % (pid, y_key)
@@ -649,21 +679,22 @@ def trainTrendModels(pid, training_games, y_key, weigh_recent=False, test=False,
                 indices = [i for i,a in sorted(enumerate(predicted_trend), key=lambda x:x[1])]
                 sorted_actual = [actual[indices[i]] for i in range(len(indices))]
                 sorted_actual_trends = [actual_trend[indices[i]] for i in range(len(indices))]
-                sorted_predicted = [predicted[indices[i]] for i in range(len(indices))]
+                #sorted_predicted = [predicted[indices[i]] for i in range(len(indices))]
                 sorted_predicted_trends = [predicted_trend[indices[i]] for i in range(len(indices))]
                 sorted_avgs = [avgs[indices[i]] for i in range(len(indices))]
                 sorted_vars = [predicted_vars[indices[i]] for i in range(len(indices))]
 
                 fig = plt.figure()
-                p1 = plt.plot(sorted_actual_trends)
-                p2 = plt.plot(sorted_predicted_trends)
-                p3 = plt.plot(sorted_vars)
+                p1 = plt.plot(sorted_actual_trends, marker='o', label='actual')
+                p2 = plt.plot(sorted_predicted_trends, marker='o', label='predicted')
+                p3 = plt.plot(sorted_vars, marker='o', label='vars')
                 fig.suptitle(name, fontsize=20)
+                plt.legend(loc='best', shadow=True)
     if test and plot:
         plt.show(block=True)
     return (processors, models)
 
-def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, plot=False):
+def trainCoreModels(pid, training_games, y_key, weigh_recent=False, weigh_outliers=True, test=False, plot=False):
     processors = {}
     models = {}
 
@@ -673,7 +704,7 @@ def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, 
         test_size = 0.0
 
     for name, f in CORE_FEATURE_FNS:
-        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent, weigh_outliers=True)
+        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent, weigh_outliers=weigh_outliers)
     for name,proc in processors.iteritems():
         X = proc.getAllSamples()
         trendY = proc.getTrendY()
@@ -683,17 +714,21 @@ def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, 
         ra = proc.getRunningAverage()
         kernel = proc.getKernel()
 
-        framework = GPCrossValidationFramework(kernel, X, realY, test_size=0.20, restarts=10)
-        framework.train(zip_data=None, weigh_recent=weigh_recent)
+        framework = GPCrossValidationFramework(kernel, X, realY, test_size=test_size, restarts=10)
+        framework.train(zip_data=None)
         models[name] = framework
 
         if test:
-            means, variances = framework.model.predict(framework.X_test)
+            predicted = []
+            predicted_vars = []
+            for x_test in framework.X_test:
+                means, variances = framework.model.predict(np.array([x_test]))
+                predicted.append(means[0][0])
+                predicted_vars.append(math.sqrt(variances[0][0]))
+
+            
 
             actual = [_[0] for _ in framework.Y_test]
-            
-            predicted = [_[0] for _ in means]
-            predicted_vars = [_[0] for _ in variances]
             corrs = np.corrcoef(actual, predicted)
 
             print "%s for %s" % (pid, y_key)
@@ -710,18 +745,67 @@ def trainCoreModels(pid, training_games, y_key, weigh_recent=False, test=False, 
                 sorted_vars = [predicted_vars[indices[i]] for i in range(len(indices))]
 
                 fig = plt.figure()
-                p1 = plt.plot(sorted_actual)
-                p2 = plt.plot(sorted_predicted)
-                p3 = plt.plot(sorted_vars)
+                p1 = plt.plot(sorted_actual, marker='o', label='actual')
+                p2 = plt.plot(sorted_predicted, marker='o', label='predicted')
+                p3 = plt.plot(sorted_vars, marker='o', label='vars')
                 fig.suptitle(name, fontsize=20)
-                plt.show(block=True)
+                plt.legend(loc='best', shadow=True)
+    if test and plot:
+        plt.show(block=True)
     return (processors, models)
 
 
 if __name__ == "__main__":
     pid = "irvinky01"
-    y_key = 'AST'
+    y_key = 'PTS'
     print "training %s for %s" % (pid, y_key)
     training_games = findAllTrainingGames(pid)
-    core_processors, core_models = trainCoreModels(pid, training_games, y_key, test=True, plot=True)
-    trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, test=True, plot=True)
+    proc = getProcessor(pid, training_games, 'runEncoderFeatures', y_key, weigh_recent=False, weigh_outliers=False)
+    X = proc.getAllSamples()
+    labels = proc.getFeatureLabels()
+
+    for x in X:
+        for a,b in zip(labels,x):
+            print "%s: %s" % (a,b)
+
+    sys.exit(1)
+
+
+
+    realY = proc.getY()
+    kernel = proc.getKernel()
+    framework = GPCrossValidationFramework(kernel, X, realY, test_size=0.3, restarts=10)
+    framework.train(zip_data=None)
+    print framework.model
+
+    predicted = []
+    predicted_vars = []
+    for x_test in framework.X_test:
+        means, variances = framework.model.predict(np.array([x_test]))
+        predicted.append(means[0][0])
+        predicted_vars.append(math.sqrt(variances[0][0]))
+    actual = [_[0] for _ in framework.Y_test]
+    corrs = np.corrcoef(actual, predicted)
+    print "%s for %s" % (pid, y_key)
+    print actual
+    print predicted
+    print predicted_vars
+    print corrs
+
+    if plot:
+        indices = [i for i,a in sorted(enumerate(predicted), key=lambda x:x[1])]
+        sorted_actual = [actual[indices[i]] for i in range(len(indices))]
+        sorted_predicted = [predicted[indices[i]] for i in range(len(indices))]
+        sorted_vars = [predicted_vars[indices[i]] for i in range(len(indices))]
+
+        fig = plt.figure()
+        p1 = plt.plot(sorted_actual, marker='o', label='actual')
+        p2 = plt.plot(sorted_predicted, marker='o', label='predicted')
+        p3 = plt.plot(sorted_vars, marker='o', label='vars')
+        fig.suptitle(name, fontsize=20)
+        plt.legend(loc='best', shadow=True)
+
+
+    sys.exit(1)
+    core_processors, core_models = trainCoreModels(pid, training_games, y_key, weigh_outliers=False, test=True, plot=True)
+    trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, weigh_outliers=False, test=True, plot=True)

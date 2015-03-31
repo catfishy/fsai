@@ -3,8 +3,8 @@ import sys
 import logging
 
 from statsETL.bball.BRcrawler import playerCrawler, teamCrawler, gameCrawler
-from statsETL.bball.NBAcrawler import crawlUpcomingGames
-from analysis.util.kimono import updateNBARosters
+from statsETL.bball.NBAcrawler import crawlUpcomingGames, crawlNBATrackingStats
+from analysis.util.kimono import getDepthChart, getESPNTeamStats
 from analysis.bball.gameAnalysis import modelPlayersInUpcomingGames
 
 
@@ -27,19 +27,19 @@ if __name__=="__main__":
     essential = options.essential
 
     if essential:
-        g_crawl = gameCrawler(refresh=True, days_back=7)
+        g_crawl = gameCrawler(refresh=True, days_back=1000)
         g_crawl.run()
-        updateNBARosters()
         crawlUpcomingGames(days_ahead=7)
+        getDepthChart()
+        getESPNTeamStats(crawl=True)
+        crawlNBATrackingStats()
     elif crawl:
         p_crawl = playerCrawler(refresh=True)
         t_crawl = teamCrawler(refresh=True)
-        g_crawl = gameCrawler(refresh=True, days_back=7)
-        #p_crawl.run()
+        g_crawl = gameCrawler(refresh=True, days_back=14)
+        p_crawl.run()
         g_crawl.run()
-        #t_crawl.run()
-        #updateNBARosters()
-        #crawlUpcomingGames(days_ahead=7)
+        t_crawl.run()
     if model:
         # create logger
         logger = logging.getLogger("player_modeling")

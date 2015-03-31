@@ -2,7 +2,7 @@ from optparse import OptionParser
 import sys
 import logging
 
-from analysis.bball.gameAnalysis import analyzeFanDuelGame, graphUpcomingGames
+from analysis.bball.gameAnalysis import analyzeFanDuelGame, graphUpcomingGames, fantasySalaryEfficiency
 
 
 if __name__=="__main__":
@@ -32,5 +32,7 @@ if __name__=="__main__":
         logger.addHandler(ch)
 
     #analyzeFanDuelGame(gameid, logger, crawl=crawl)
-    graphUpcomingGames(gameid)
+    #graphUpcomingGames(gameid)
+    fantasySalaryEfficiency(gameid, logger, window=4, pt_limit=24, roster_pt_limit=304, crawl=crawl)
+
 

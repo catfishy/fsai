@@ -27,7 +27,7 @@ class teamCrawler(Crawler):
     BLACKLIST = ['html']
     WHITELIST = ["/teams/"]
     PROCESSES = 4
-    CURRENT_SEASON = "2015"
+    SEASONS = [str(x) for x in range(2010,2020)]
 
     def __init__(self, refresh=False, logger=None):
         super(teamCrawler, self).__init__(logger=logger)
@@ -66,7 +66,8 @@ class teamCrawler(Crawler):
         season_table = soup.find('table', id=team_id)
         roster_url = season_table.find('tbody').find('tr').find('td').find('a')['href']
         roster_url = self.LINK_BASE + roster_url
-        if self.CURRENT_SEASON not in roster_url:
+        fits_seasons = any([cs in roster_url for cs in self.SEASONS])
+        if not fits_seasons:
             self.logger.info("Not a current team")
             return {}
         self.logger.info("Crawling INTO: %s" % roster_url)
@@ -169,6 +170,10 @@ class gameCrawler(Crawler):
         self.player_game_collection = self.nba_conn.getCollection("player_games")
         self.game_collection = self.nba_conn.getCollection("games")
 
+        # create a player crawler in case need to crawl for players
+        self.player_crawler = playerCrawler(refresh=True)
+        self.player_crawler.createLogger()
+
     def isGamePage(self, url, soup):
         '''
         - check url fits pattern
@@ -199,6 +204,12 @@ class gameCrawler(Crawler):
         team2_insides = finalscore_table_insides[1]('br')
         team1_finalscore = team1_insides[0].string
         team2_finalscore = team2_insides[0].string
+
+        # CHECK THAT record/winloss INFO EXISTS, in not, its a playoff game, so skip
+        if len(team1_insides) < 2 or len(team2_insides) < 2:
+            self.logger.info("PLAYOFF GAME, CONTINUING...")
+            return {}
+        
         team1_record = team1_insides[1].contents[0].split(' ')
         team2_record = team2_insides[1].contents[0].split(' ')
         team1_winloss = team1_record[0]
@@ -209,6 +220,9 @@ class gameCrawler(Crawler):
         gameinfo_table = final_insides[1].find('td').contents
         gametime = gameinfo_table[0]
         time_parts = [x.strip() for x in gametime.split(',')]
+        if len(time_parts) == 2:
+            # no time of day given, spoof 7 pm
+            time_parts.insert(0,'7:00 PM')
         time_part_time = time_parts[0].split(' ')
         time_part_monthday = time_parts[1].split(' ')
         time_part_day = int(time_part_monthday[1])
@@ -216,8 +230,10 @@ class gameCrawler(Crawler):
         time_part_year = int(time_parts[2])
         time_part_hour = int(time_part_time[0].split(':')[0])
         time_part_minute = int(time_part_time[0].split(':')[1])
-        if time_part_time[1].lower() == 'pm':
+        if time_part_time[1].lower() == 'pm' and time_part_hour != 12:
             time_part_hour += 12
+        if time_part_time[1].lower() == 'am' and time_part_hour == 12:
+            time_part_hour = 0
 
         gametime = datetime(year=time_part_year, month=time_part_month, day=time_part_day, hour=time_part_hour, minute=time_part_minute)
 
@@ -266,6 +282,45 @@ class gameCrawler(Crawler):
             d.pop('')
             d['game_id'] = game_id
 
+        # pull more team stats from /boxscores/shot-chart/<id>.html
+        shotcharturl = "%sshot-chart/%s.html" % (self.INIT_PAGE, game_id)
+        # get content
+        try:
+            shotchart_soup = self.getContent(shotcharturl)
+            self.logger.info("Crawling into %s" % shotcharturl)
+        except Exception as e:
+            self.logger.info("%s no content: %s" % (url,e))
+            raise Exception("No shot chart content for %s" % url)
+
+        team1_div_id = "shooting-%s" % team1_id.upper()
+        team2_div_id = "shooting-%s" % team2_id.upper()
+        team1_chart = shotchart_soup.find("table", id=team1_div_id)
+        team2_chart = shotchart_soup.find("table", id=team2_div_id)
+
+        team1_chart('colgroup')[0].extract()
+        team1_chart.thead.unwrap()
+        team1_chart.tbody.unwrap()
+        team1_chart.tfoot.unwrap()
+        team1_shooting_dict = [_ for _ in self.convert_html_table_to_dict(team1_chart) if _]
+        team1_total = None
+        for row in team1_shooting_dict:
+            if row['Qtr'] == 'Tot':
+                row.pop('Qtr', None)
+                team1_total = row
+                break
+
+        team2_chart('colgroup')[0].extract()
+        team2_chart.thead.unwrap()
+        team2_chart.tbody.unwrap()
+        team2_chart.tfoot.unwrap()
+        team2_shooting_dict = [_ for _ in self.convert_html_table_to_dict(team2_chart) if _]
+        team2_total = None
+        for row in team2_shooting_dict:
+            if row['Qtr'] == 'Tot':
+                row.pop('Qtr', None)
+                team2_total = row
+                break
+
         # Save scoring_dict and factors_dict to respective team/game stat rows
         for scoring_stat in scoring_dict:
             # update with factors info
@@ -273,12 +328,19 @@ class gameCrawler(Crawler):
                 if factor_stat['team_id'] == scoring_stat['team_id']:
                     scoring_stat.update(factor_stat)
                     break
+            # update with shooting stats
+            if scoring_stat['team_id'] == team1_id:
+                scoring_stat.update(team1_total)
+            elif scoring_stat['team_id'] == team2_id:
+                scoring_stat.update(team2_total)
+
+            # update with location info
             if scoring_stat['team_id'] == data['away_id']:
                 scoring_stat['location'] = "Away"
             else:
                 scoring_stat['location'] = "Home"
 
-        # parse player stats
+        # Parse player stats
         stats_tables = stats_div('div', class_='table_container')
         stats_tables_by_id = {tablediv['id'].replace('div_','') : tablediv.table for tablediv in stats_tables}
         player_game_stats = {}
@@ -291,7 +353,8 @@ class gameCrawler(Crawler):
             v('tr')[0].extract()
             v_dict = [_ for _ in self.convert_html_table_to_dict(v) if _]
             # player name in column u'Starters' 
-            for d in v_dict:
+            starters = []
+            for i, d in enumerate(v_dict):
                 d['game_id'] = game_id
                 d['game_time'] = data['time']
                 # find the player id
@@ -299,6 +362,10 @@ class gameCrawler(Crawler):
                 player_id_link = v.find('a', href=True, text=player_name)['href']
                 player_id = player_id_link.split('/')[-1].replace('.html','')
                 d['player_id'] = player_id
+
+                if i < 5:
+                    starters.append(player_id)
+
                 d['player_team'] = table_team
                 d.pop('Starters')
                 # convert dnp to 0 mins
@@ -317,6 +384,23 @@ class gameCrawler(Crawler):
                     player_game_stats[d['player_id']].update(d)
                 else:
                     player_game_stats[d['player_id']] = d
+
+                # CRAWL PLAYER IF PLAYER NOT IN DATABASE
+                if not player_collection.find_one(d['player_id']):
+                    pid = d['player_id']
+                    # recreate url
+                    add_on = "%s/%s.html" % (pid[0], pid)
+                    url = self.player_crawler.INIT_PAGE + add_on
+                    # crawl player
+                    self.logger.info("CRAWLING PLAYER: %s" % url)
+                    self.player_crawler.crawlPage(url)
+
+            if 'home_starters' not in data:
+                if table_team == data['home_id']:
+                    data['home_starters'] = starters
+            if 'away_starters' not in data:
+                if table_team.strip() == data['away_id']:
+                    data['away_starters'] = starters
 
         # parse game info at bottom of page
         lower_gameinfo_table = stats_div('table', recursive=False)[0]
