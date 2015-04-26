@@ -125,15 +125,18 @@ class Crawler(object):
     def get_whitelist(cls):
         return cls.WHITELIST
 
-    def convert_html_table_to_dict(self, table):
+    def convert_html_table_to_dict(self, table, use_data_stat=False):
         dict_list = []
         rows = table('tr',recursive=False)
         header_row = rows[0]
-        headers = [col.string for col in header_row.contents if type(col) == element.Tag]
+        if use_data_stat:
+            headers = [col['data-stat'] for col in header_row.contents if type(col) == element.Tag]
+        else:
+            headers = [col.text for col in header_row.contents if type(col) == element.Tag]
         headers = [h.strip() if h else u'' for h in headers]
         for row in rows[1:]:
             cols = row('td',recursive=False)
-            values = [col.string for col in cols if type(col) == element.Tag]
+            values = [col.text for col in cols if type(col) == element.Tag]
             for i, v in enumerate(values):
                 try:
                     values[i] = float(v)
@@ -177,7 +180,6 @@ class Crawler(object):
         self.mp_crawler.start()
         self.mp_crawler.join()
 
-
     def checkVisit(self, url):
         '''
         Check if the url has been visited,
@@ -202,12 +204,11 @@ class Crawler(object):
         init_soup = BeautifulSoup(init_content)
         return init_soup
 
-
     def checkAdd(self, url):
-        if url in self.added or url in self.visited:
-            return False
+        self.url_add_lock.acquire()
         self.queue.put(url,block=True)
         self.added.add(url)
+        self.url_add_lock.release()
         return True
 
     def addLinksToQueue(self, links):
@@ -230,11 +231,13 @@ class Crawler(object):
             # construct full link
             full = self.LINK_BASE + raw
 
-            # try to add to queue
-            self.url_add_lock.acquire()
-            added = self.checkAdd(full)
-            self.url_add_lock.release()
+            # check visit
+            if full in self.added or full in self.visited:
+                continue
 
+            # try to add to queue
+            added = self.checkAdd(full)
+            
             if added:
                 urls_added.append(full)
                 links_added += 1

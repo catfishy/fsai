@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timedelta
 import time
+from collections import defaultdict
 
 import requests
 import simplejson as json
@@ -17,14 +18,14 @@ FANDUEL_DRAFT_PAGE_API = "6a0gv9bw"
 NBA_ROSTER_URLS_API = "apxs63v4"
 NBA_ROSTER_API = "26djfnzm"
 TEAMSTAT_API = "3qmi47kk"
-DEPTH_API = "6g4mw7t4"
 
 def updateNBARosters():
     """
     get all the nba roster urls,
     then crawl for the roster
     """
-    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=True)
+    url = "http://espn.go.com/nba/players"
+    results = crawlAndGetContent(NBA_ROSTER_URLS_API, crawl=False)
     if not results:
         return
     results = results['collection1']
@@ -36,73 +37,56 @@ def updateNBARosters():
         roster_urls[team_name] = team_roster_url
     updateNBARosterURLS(roster_urls)
 
-def getDepthChart():
-    # update rosters first
-    updateNBARosters()
-
-    results = crawlAndGetContent(DEPTH_API, crawl=True)
-    if not results:
-        raise Exception("No Depth Results")
-    results = results['collection1']
-    to_return = {}
-    for r in results[2:]:
-        row = {}
-        for k,v in r.iteritems():
-            row[k] = v['text']
-        team = row.pop('team')
-        to_return[team] = row
-
-    # translate names
-    teamnames = translateTeamNames(to_return.keys())
-    old_names = to_return.keys()
-    for k in old_names:
-        to_return[teamnames[k]] = to_return[k]
-        to_return.pop(k, None)
-
-    # try to save to database
+def getESPNTeamStats():
     x = datetime.now()
     today = datetime(day=x.day,month=x.month,year=x.year)
-    to_save = {"time" : today, "stats": to_return}
-    try:
-        nba_conn.saveDocument(espn_depth_collection, to_save)
-    except DuplicateKeyError as e:
-        print "%s espn team stats already saved" % today
 
-    return to_return
-
-def getESPNTeamStats(crawl=True):
-    results = crawlAndGetContent(TEAMSTAT_API, crawl=crawl)
+    results = crawlAndGetContent(TEAMSTAT_API, crawl=False, with_url=True)
     results = results['collection1']
+
+    by_url = defaultdict(list)
+
+    results[1].pop('url')
     key_translate = {k: v['text'] for k,v in results[1].iteritems()}
-    values = []
     team_names = []
     for row in results[2:]:
+        url = row.pop('url')
         translated = {}
+        valid_row = False
         for k,v in row.iteritems():
             try:
                 newval = float(v['text'])
+                valid_row = True # valid row if holding some floats
             except Exception as e:
                 newval = v['text']
             translated[key_translate[k]] = newval
+        if not valid_row:
+            continue
         team_names.append(translated['TEAM'])
-        values.append(translated)
+        by_url[url].append(translated)
     team_translate = translateTeamNames(team_names)
-    to_return = {}
-    for v in values:
-        name = v.pop('TEAM')
-        to_return[team_translate[name]] = v
-    
-    # save to database
-    if crawl:
-        x = datetime.now()
-        today = datetime(day=x.day,month=x.month,year=x.year)
-        to_save = {"time" : today, "stats": to_return}
+
+    for k,values in by_url.items():
+        to_return = {}
+        for v in values:
+            name = v.pop('TEAM')
+            to_return[team_translate[name]] = v
+        
+        # derive date from url
+        if '/year/' in k:
+            # spoof end of season
+            year = int(k.split('/')[-1])
+            date = datetime(day=1,month=7,year=year)
+        else:
+            date = today
+
+        # save to database
+        to_save = {"time" : date, "stats": to_return}
+
         try:
             nba_conn.saveDocument(espn_stat_collection, to_save)
         except DuplicateKeyError as e:
-            print "%s espn team stats already saved" % today
-
-    return to_return
+            print "%s espn team stats already saved" % date
 
 def fanDuelNBADraftAPIContent(targeturl, crawl=True):
     """
@@ -208,7 +192,6 @@ def createFanDuelDraftURL(game_table_id):
     new_url = "https://www.fanduel.com/e/Game/%s" % game_table_id
     return new_url
 
-
 def getKimonoAPIContent(kimono_api_id):
     path = "/%s?apikey=%s" % (kimono_api_id, KIMONO_API_KEY)
     url = KIMONO_URL_ROOT + path
@@ -218,15 +201,16 @@ def getKimonoAPIContent(kimono_api_id):
     content = json.loads(response.content)
     return content
 
-def getKimonoAPIResults(kimono_api_id):
+def getKimonoAPIResults(kimono_api_id, with_url=False):
     path = "/%s?apikey=%s" % (kimono_api_id, KIMONO_API_KEY)
+    if with_url:
+        path += "&kimwithurl=1"
     url = KIMONO_URL_DATA + path
     response = requests.get(url)
     if response.status_code != 200:
         raise Exception(response.content)
     content = json.loads(response.content)
     return content['results']
-
 
 def changeKimonoTargetURL(kimono_api_id, new_url):
     post_data = {"apikey" : KIMONO_API_KEY,
@@ -255,6 +239,7 @@ def startKimonoCrawl(kimono_api_id):
     post_data = {"apikey" : KIMONO_API_KEY}
     url = KIMONO_URL_ROOT + path
     print url
+    print post_data
     response = requests.post(url, post_data)
     if response.status_code != 200:
         print response.content
@@ -262,24 +247,29 @@ def startKimonoCrawl(kimono_api_id):
         raise Exception(response.content)
     return response
 
-def crawlAndGetContent(kimono_api_id, crawl=True, retries=3):
+def crawlAndGetContent(kimono_api_id, crawl=False, retries=3, with_url=False):
     print "Hitting %s, crawl: %s" % (kimono_api_id, crawl)
     if crawl:
+        crawled = None
         for retry in range(retries):
             try:
                 crawled = startKimonoCrawl(kimono_api_id)
+                print crawled
                 break
             except Exception as e:
-                print "Failed crawl: %s" % e
+                print "Failed crawl attempt : %s" % e
+        if crawled is None:
             raise Exception("Failed after %s retries" % retries)
     api = getKimonoAPIContent(kimono_api_id)
     while api["lastrunstatus"] != "success":
         time.sleep(1)
         api = getKimonoAPIContent(kimono_api_id)
-    results = getKimonoAPIResults(kimono_api_id)
+    results = getKimonoAPIResults(kimono_api_id, with_url=with_url)
     return results
 
 if __name__ == "__main__":
     #data = fanDuelNBADraftAPIContent()
-    #print getESPNTeamStats(crawl=True)
-    getDepthChart()
+    getESPNTeamStats()
+    #getDepthChart()
+    updateNBARosters()
+

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from xml.etree import ElementTree as ET
 import calendar
 import time
+from collections import defaultdict
+import traceback
 
 from bs4 import BeautifulSoup, element
 import requests
@@ -27,7 +29,7 @@ class teamCrawler(Crawler):
     BLACKLIST = ['html']
     WHITELIST = ["/teams/"]
     PROCESSES = 4
-    SEASONS = [str(x) for x in range(2010,2020)]
+    SEASONS = [str(x) for x in range(2005,2020)]
 
     def __init__(self, refresh=False, logger=None):
         super(teamCrawler, self).__init__(logger=logger)
@@ -58,38 +60,60 @@ class teamCrawler(Crawler):
         loc_string = loc_span.next_sibling.strip()
         name_span = p_s("span")[1]
         name_strings = name_span.next_sibling.split(',')
-        recent_name = name_strings[0].strip()
+        recent_names = [_.strip() for _ in name_strings]
         data = {'location': loc_string,
-                'name': recent_name,
+                'name': recent_names,
                 'url': url}
         # FIND ROSTER URL
         season_table = soup.find('table', id=team_id)
-        roster_url = season_table.find('tbody').find('tr').find('td').find('a')['href']
-        roster_url = self.LINK_BASE + roster_url
-        fits_seasons = any([cs in roster_url for cs in self.SEASONS])
-        if not fits_seasons:
+        roster_urls = [self.LINK_BASE + r.find('td').find('a')['href'] for r in season_table.find('tbody').findAll('tr')]
+        lineup_urls = []
+
+        # find valid rows
+        valid_roster_urls = []
+        for url in roster_urls:
+            if any([cs in url for cs in self.SEASONS]):
+                valid_roster_urls.append(url)
+
+        if len(valid_roster_urls) == 0:
             self.logger.info("Not a current team")
             return {}
-        self.logger.info("Crawling INTO: %s" % roster_url)
-        # load the id
-        data['_id'] = roster_url.split('/')[-2].strip()
-        roster_response = requests.get(roster_url, timeout=10)
-        roster_content = roster_response.content
-        roster_soup = BeautifulSoup(roster_content)
-        roster_table = roster_soup.find("table", id="roster")
-        roster_rows = roster_table.findAll('a', href=re.compile('players'))
-        roster_ids = []
-        for link in roster_rows:
-            href = link['href']
-            player_id = href.split('/')[-1].strip().replace('.html','')
-            if player_id:
-                roster_ids.append(player_id)
 
-        #data['players'] = roster_ids
+        # get lineup info for each year
+        arenas = set()
+        all_ids = set()
+        for i, url in enumerate(valid_roster_urls):
+            link_id = url.split('/')[-2].strip()
+            if i == 0:
+                data['_id'] = link_id
+            all_ids.add(link_id)
+            year = int(url.split('/')[-1].replace('.html',''))
+            lineup_url = url.replace('.html','/lineups/')
+           
+            self.logger.info("Crawling INTO: %s (Year: %s)" % (url, year))
+            content = self.getContent(url)
+            r = re.compile(".*Arena:.*")
+            entry = content.find_all(text=r)[0]
+            arena = unicode(entry.parent.next_sibling.string)
+            arena = arena.encode('ascii','ignore').replace(';','').strip()
+            arenas.add(arena)
 
-        self.logger.info("SAVING: %s" % data)
-        self.nba_conn.saveDocument(self.team_collection, data)
-        return data
+            #self.logger.info("Crawling INTO: %s (Year: %s)" % (lineup_url,year))
+            #ln_content = self.getContent(lineup_url)
+            # TODO: DO SOMETHING WITH LINE INFO WHEN USE CASE ARISES
+
+        data['arenas'] = list(arenas)
+        data['all_ids'] = list(all_ids)
+
+        # merge with old data
+        old_data = self.team_collection.find_one({"_id" : data['_id']})
+        if old_data is None:
+            old_data = {}
+        old_data.update(data)
+
+        self.logger.info("SAVING: %s" % old_data)
+        self.nba_conn.saveDocument(self.team_collection, old_data)
+        return old_data
 
     def itemExists(self, url):
         '''
@@ -129,33 +153,29 @@ class gameCrawler(Crawler):
 
     INIT_PAGE = "http://www.basketball-reference.com/boxscores/"
     LINK_BASE = "http://www.basketball-reference.com"
-    BLACKLIST = ['pbp','shot-chart','plus-minus']
+    BLACKLIST = ['pbp','shot-chart','plus-minus', 'baseball-reference', 'sports-reference', 
+                 'hockey-reference', 'twitter', 'facebook', 'youtube', '/nbdl/']
     WHITELIST = ["/boxscores/"]
-    PROCESSES = 4
+    PROCESSES = 3
 
-    def __init__(self, refresh=False, logger=None, limit=None, days_back=None):
+    def __init__(self, refresh=False, logger=None, limit=None, days_back=1000, end_date=None):
         super(gameCrawler, self).__init__(logger=logger, limit=limit)
         self.name = "gameCrawler"
         # add tomorrow to blacklist to prevent going into the future
         # each box score page only has links to day before and after
-        now = datetime.now() + timedelta(1) # one day from now
-        day = now.day
-        month = now.month
-        year = now.year
-        dateblacklist = "index.cgi?month=%s&day=%s&year=%s" % (month,day,year)
-        self.BLACKLIST.append(dateblacklist)
+        if end_date:
+            self.custom_end = True
+            self.end_date = end_date + timedelta(1)
+        else:
+            self.custom_end = False
+            self.end_date = datetime.now() + timedelta(1)
+        self.start_date = self.end_date - timedelta(int(days_back))
 
-        self.upper_limit = now
-        self.lower_limit = None
+        self.BLACKLIST.append("index.cgi?month=%s&day=%s&year=%s" % (self.end_date.month,self.end_date.day,self.end_date.year))
+        self.BLACKLIST.append("index.cgi?month=%s&day=%s&year=%s" % (self.start_date.month,self.start_date.day,self.start_date.year))
 
-        if days_back:
-            now = datetime.now() - timedelta(int(days_back))
-            day = now.day
-            month = now.month
-            year = now.year
-            dateblacklist = "index.cgi?month=%s&day=%s&year=%s" % (month,day,year)
-            self.BLACKLIST.append(dateblacklist)
-            self.lower_limit = now
+        self.upper_limit = self.end_date
+        self.lower_limit = self.start_date
 
         print self.upper_limit
         print self.lower_limit
@@ -185,6 +205,29 @@ class gameCrawler(Crawler):
             return False
         return True
 
+    def run(self):
+        '''
+        run multiprocessed crawling
+        '''
+        # create logger
+        if not self.logger:
+            self.createLogger()
+        self.logger.info("INIT: %s" % self.INIT_PAGE)
+        self.logger.info("BLACKLIST: %s" % self.BLACKLIST)
+        self.logger.info("WHITELIST: %s" % self.WHITELIST)
+        # add initial page to queue
+        if self.custom_end:
+            new_init = "%sindex.cgi?month=%s&day=%s&year=%s" % (self.INIT_PAGE, self.end_date.month, self.end_date.day, self.end_date.year)
+            self.queue.put(new_init, block=True)
+            self.added.add(new_init)
+        else:
+            self.queue.put(self.INIT_PAGE,block=True)
+            self.added.add(self.INIT_PAGE)
+        self.mp_crawler = MultiprocessCrawler(type(self).__name__, self.logger, self.queue, self, num_processes=self.PROCESSES)
+        self.mp_crawler.start()
+        self.mp_crawler.join()
+
+
     def crawlGamePage(self, url, soup):
         game_id = url.split('/')[-1].replace('.html','').strip().upper()
         page_content = soup.find('div', id="page_content").find('table')
@@ -205,17 +248,16 @@ class gameCrawler(Crawler):
         team1_finalscore = team1_insides[0].string
         team2_finalscore = team2_insides[0].string
 
-        # CHECK THAT record/winloss INFO EXISTS, in not, its a playoff game, so skip
-        if len(team1_insides) < 2 or len(team2_insides) < 2:
+        try:
+            team1_record = team1_insides[1].contents[0].split(' ')
+            team2_record = team2_insides[1].contents[0].split(' ')
+            team1_winloss = team1_record[0]
+            team2_winloss = team2_record[0]
+            team1_streak = re.sub('[\(\)]', '', ' '.join(team1_record[1:]), count=2)
+            team2_streak = re.sub('[\(\)]', '', ' '.join(team2_record[1:]), count=2)
+        except Exception as e:
             self.logger.info("PLAYOFF GAME, CONTINUING...")
             return {}
-        
-        team1_record = team1_insides[1].contents[0].split(' ')
-        team2_record = team2_insides[1].contents[0].split(' ')
-        team1_winloss = team1_record[0]
-        team2_winloss = team2_record[0]
-        team1_streak = re.sub('[\(\)]', '', ' '.join(team1_record[1:]), count=2)
-        team2_streak = re.sub('[\(\)]', '', ' '.join(team2_record[1:]), count=2)
 
         gameinfo_table = final_insides[1].find('td').contents
         gametime = gameinfo_table[0]
@@ -237,7 +279,11 @@ class gameCrawler(Crawler):
 
         gametime = datetime(year=time_part_year, month=time_part_month, day=time_part_day, hour=time_part_hour, minute=time_part_minute)
 
-        gamelocation = gameinfo_table[1].string
+        try:
+            gamelocation = gameinfo_table[1].string
+        except Exception as e:
+            gamelocation = None
+
         team_id_regex = re.compile("/[A-Z]+/")
         team1_id = team_id_regex.search(finalscore_table_insides[0].find('a')['href']).group(0).replace('/','')
         team2_id = team_id_regex.search(finalscore_table_insides[1].find('a')['href']).group(0).replace('/','')
@@ -373,6 +419,8 @@ class gameCrawler(Crawler):
                     d['MP'] = 0.0
                 elif d['MP'] == "Player Suspended":
                     d['MP'] = 0.0
+                elif d['MP'] is None:
+                    d['MP'] = 0.0
                 else:
                     minutessecs = d['MP'].split(':')
                     minutes = float(minutessecs[0])
@@ -419,20 +467,125 @@ class gameCrawler(Crawler):
                 inactive_ids = [l['href'].split('/')[-1].replace('.html','') for l in inactive_links]
                 data['inactive'] = inactive_ids
 
+        # CALCULATE NORMALIZED BY 100 POSSESSION STATS for the player stats
+        player_game_stats = self.calculateNormalizedStats(player_game_stats, scoring_dict)
+
         # ALL THE SAVING
+        self.logger.info("Attempting SAVING: %s" % data)
         for scoring_stat in scoring_dict:
             try:
                 self.nba_conn.saveDocument(self.team_game_collection, scoring_stat)
             except DuplicateKeyError as e:
+                self.logger.info("Already saved team game...")
                 continue
         for player_name, player_stats in player_game_stats.iteritems():
             try:
                 self.nba_conn.saveDocument(self.player_game_collection, player_stats)
             except DuplicateKeyError as e:
+                self.logger.info("Already saved player game...")
                 continue
-        self.logger.info("SAVING: %s" % data)
-        self.nba_conn.saveDocument(self.game_collection, data)
+        try:
+            self.nba_conn.saveDocument(self.game_collection, data)
+        except DuplicateKeyError as e:
+            self.logger.info("Already saved game...")
+
         return data
+
+    def calculateNormalizedStats(self, player_game_stats, team_scoring_stats):
+        '''
+        Making the calculations according to http://www.basketball-reference.com/about/ratings.html
+        '''
+        # sum the scoring stats by team
+        to_norm = ["FT", "3P", "TOV", "FG", "3PA", "DRB", "AST", "PF", 
+                   "PTS", "FG", "STL", "TRB", "FTA", "BLK", "ORB"]
+        team_sum_keys = ['FGA', 'FT', 'FTA', 'AST', 'MP', 'PTS', 'ORB', 'TRB', 'DRB' ,'TOV', '3P', 'STL', 'BLK', 'PF', 'FG']
+        team_stats = {}
+        for row in team_scoring_stats:
+            team_stats[row['team_id']] = {k : 0.0 for k in team_sum_keys}
+        for player_name, player_row in player_game_stats.iteritems():
+            if player_row['MP'] == 0.0:
+                continue
+            tid = player_row['player_team']
+            for k in team_sum_keys:
+                team_stats[tid][k] += float(player_row[k])
+        both_teams = team_stats.keys()
+        # calculate normalized by 100 possessions for each player row
+        for player_name, player_row in player_game_stats.iteritems():
+            if player_row['MP'] == 0.0:
+                continue
+            team = team_stats[player_row['player_team']]
+            opp_team = both_teams[0] if both_teams[0] != player_row['player_team'] else both_teams[1]
+            opponent = team_stats[opp_team]
+            # basic
+            PTS = float(player_row['PTS'])
+            FGA = float(player_row['FGA'])
+            FTM = float(player_row['FT'])
+            FTA = float(player_row['FTA'])
+            MP = float(player_row['MP'])
+            TOV = float(player_row['TOV'])
+            AST = float(player_row['AST'])
+            STL = float(player_row['STL'])
+            BLK = float(player_row['BLK'])
+            DRB = float(player_row['DRB'])
+            ORB = float(player_row['ORB'])
+            FGM = float(player_row['FG'])
+            PF = float(player_row['PF'])
+            Three_PM = float(player_row['3P'])
+            try:
+                # offensive
+                qAST = ((MP / (team['MP'] / 5)) * (1.14 * ((team['AST'] - AST) / team['FG']))) + ((((team['AST'] / team['MP']) * MP * 5 - AST) / ((team['FG'] / team['MP']) * MP * 5 - FGM)) * (1 - (MP / (team['MP'] / 5))))
+                FG_Part = FGM * (1 - 0.5 * ((PTS - FTM) / (2 * FGA)) * qAST) if FGA > 0.0 else 0.0
+                AST_Part = 0.5 * (((team['PTS'] - team['FT']) - (PTS - FTM)) / (2 * (team['FGA'] - FGA))) * AST
+                FT_Part = (1-(1-(FTM/FTA))**2)*0.4*FTA if FTA > 0.0 else 0.0
+                Team_Scoring_Poss = team['FG'] + (1 - (1 - (team['FT'] / team['FTA']))**2) * team['FTA'] * 0.4
+                Team_ORB_percent = team['ORB'] / (team['ORB'] + (opponent['TRB'] - opponent['ORB']))
+                Team_Play_percent = Team_Scoring_Poss / (team['FGA'] + team['FTA'] * 0.4 + team['TOV'])
+                Team_ORB_Weight = ((1 - Team_ORB_percent) * Team_Play_percent) / ((1 - Team_ORB_percent) * Team_Play_percent + Team_ORB_percent * (1 - Team_Play_percent))
+                ORB_Part = ORB * Team_ORB_Weight * Team_Play_percent
+                ScPoss = (FG_Part + AST_Part + FT_Part) * (1 - (team['ORB'] / Team_Scoring_Poss) * Team_ORB_Weight * Team_Play_percent) + ORB_Part
+                FGxPoss = (FGA - FGM) * (1 - 1.07 * Team_ORB_percent)
+                FTxPoss = ((1 - (FTM / FTA))**2) * 0.4 * FTA if FTA > 0.0 else 0.0
+                TotPoss = ScPoss + FGxPoss + FTxPoss + TOV
+                PProd_FG_Part = 2 * (FGM + 0.5 * Three_PM) * (1 - 0.5 * ((PTS - FTM) / (2 * FGA)) * qAST) if FGA > 0.0 else 0.0
+                PProd_AST_Part = 2 * ((team['FG'] - FGM + 0.5 * (team['3P'] - Three_PM)) / (team['FG'] - FGM)) * 0.5 * (((team['PTS'] - team['FT']) - (PTS - FTM)) / (2 * (team['FGA'] - FGA))) * AST
+                PProd_ORB_Part = ORB * Team_ORB_Weight * Team_Play_percent * (team['PTS'] / (team['FG'] + (1 - (1 - (team['FT'] / team['FTA']))**2) * 0.4 * team['FTA']))
+                PProd = (PProd_FG_Part + PProd_AST_Part + FTM) * (1 - (team['ORB'] / Team_Scoring_Poss) * Team_ORB_Weight * Team_Play_percent) + PProd_ORB_Part
+                Floor_percent = ScPoss / TotPoss if TotPoss > 0.0 else None
+                # defensive
+                Team_Possessions = opponent['FGA'] + (0.44 * opponent['FT']) + opponent['TOV'] - opponent['ORB']
+                DOR_percent = opponent['ORB'] / (opponent['ORB'] + team['DRB'])
+                DFG_percent = opponent['FG'] / opponent['FGA']
+                FMwt = (DFG_percent * (1 - DOR_percent)) / (DFG_percent * (1 - DOR_percent) + (1 - DFG_percent) * DOR_percent)
+                Stops1 = STL + BLK * FMwt * (1 - 1.07 * DOR_percent) + DRB * (1 - FMwt)
+                Stops2 = (((opponent['FGA'] - opponent['FG'] - team['BLK']) / team['MP']) * FMwt * (1 - 1.07 * DOR_percent) + ((opponent['TOV'] - team['STL']) / team['MP'])) * MP + (PF / team['PF']) * 0.4 * opponent['FTA'] * (1 - (opponent['FT'] / opponent['FTA']))**2
+                Stops = Stops1 + Stops2
+                Stop_percent = (Stops * opponent['MP']) / (Team_Possessions * MP)
+                # redundancies
+                ORtg = 100 * (PProd / TotPoss) if TotPoss > 0.0 else None
+                Team_Defensive_Rating = 100 * (opponent['PTS'] / Team_Possessions)
+                D_Pts_per_ScPoss = opponent['PTS'] / (opponent['FG'] + (1 - (1 - (opponent['FT'] / opponent['FTA']))**2) * opponent['FTA']*0.4)
+                DRtg = Team_Defensive_Rating + 0.2 * (100 * D_Pts_per_ScPoss * (1 - Stop_percent) - Team_Defensive_Rating)
+            except Exception as e:
+                print player_row
+                traceback.print_exc()
+                raise e
+            # calculate possession normalized stats
+            norm_stats = {'FloorPercent' : Floor_percent,
+                          'TotPoss' : TotPoss,
+                          'Stops' : Stops,
+                          'StopPercent' : Stop_percent,
+                          'PProd' : PProd}
+            for k in to_norm:
+                if TotPoss > 0.0:
+                    normed = (float(player_row[k]) / TotPoss) * 100
+                else:
+                    normed = None
+                norm_stats['%s_per100poss' % k] = normed
+            # add calculations to row
+            player_game_stats[player_name].update(norm_stats)
+
+        return player_game_stats
+
 
     def itemExists(self, url):
         '''
@@ -484,13 +637,14 @@ class gameCrawler(Crawler):
             self.logger.info("%s already crawled in past, skipping" % url)
             return False
         time.sleep(0.1)
+
         self.url_check_lock.acquire()
         soup = self.checkVisit(url)
         self.url_check_lock.release()
 
         if not soup:
             return False
-        self.logger.info("Crawling %s" % url)
+        
         # extract links
         all_links = self.extract_links(soup)
         filtered_links = [_ for _ in all_links if self.checkDateLimit(_)]
@@ -498,6 +652,7 @@ class gameCrawler(Crawler):
         self.logger.info("Adding %s links to queue, Queue size: %s" % (new_links,self.queue.qsize()))
         # decide relevance to crawl
         if self.isGamePage(url, soup):
+            self.logger.info("Crawling %s" % url)
             self.crawlGamePage(url, soup)
             return True
         return False
@@ -515,7 +670,6 @@ class playerCrawler(Crawler):
         super(playerCrawler, self).__init__(logger=logger)
         self.name = "playerCrawler"
         self.nba_conn = MongoConn(db=NBA_DB)
-        self.player_collection = self.nba_conn.getCollection("players")
 
         self.refresh=refresh
 
@@ -607,16 +761,151 @@ class playerCrawler(Crawler):
                 else:
                     text = title_tag.next_sibling.strip().lower()
                 data[title] = text
+
         self.logger.info("SAVING: %s" % data)
-        self.nba_conn.saveDocument(self.player_collection, data)
+        self.nba_conn.saveDocument(player_collection, data)
+
+        # try crawling advanced stats
+        try:
+            self.crawlAdvancedStats(player_id, soup)
+        except Exception as e:
+            self.logger.exception("Error crawling advanced stats for %s" % player_id)
+
         return data
+
+    def crawlAdvancedStats(self, pid, soup):
+        by_year_team = defaultdict(list)
+        advanced_div = soup.find("div", id="div_advanced")
+        shooting_div = soup.find("div", id="div_shooting")
+        pbp_div = soup.find("div", id="div_advanced_pbp")
+        pop_keys = ['season', 'tm', 'pos', 'age', 'lg', 'g', 'lg_id', 'team_id', '']
+
+        # scrape advanced
+        advanced_table = advanced_div.table
+        advanced_table.tfoot.extract()
+        advanced_table.thead.unwrap()
+        advanced_table.tbody.unwrap()
+        advanced_stats = self.convert_html_table_to_dict(advanced_table)
+        for row in advanced_stats:
+            season = row['Season']
+            team = row['Tm']
+            if team.upper() == 'TOT':
+                # means the season was split between teams, just save team rows
+                continue
+            begin_year = int(season.split('-')[0])
+            key = (begin_year, team)
+            filtered = {}
+            for k,v in row.iteritems():
+                if k.lower() in pop_keys:
+                    continue
+                if not isinstance(v, float):
+                    try:
+                        v = float(v)
+                    except ValueError as e:
+                        print "Couldn't convert %s: %s to float" % (k,v)
+                        v = None
+                filtered[k] = v
+            by_year_team[key].append(filtered)
+
+        # scrape shooting
+        shooting_table = shooting_div.table
+        shooting_table.tfoot.extract()
+        # remove the first two header rows 
+        header_rows = shooting_table.thead('tr')
+        header_rows[0].extract()
+        header_rows[1].extract()
+        shooting_table.thead.unwrap()
+        shooting_table.tbody.unwrap()
+        shooting_stats = self.convert_html_table_to_dict(shooting_table, use_data_stat=True)
+        for row in shooting_stats:
+            season = row['season']
+            team = row['team_id']
+            if team.upper() == 'TOT':
+                # means the season was split between teams, just save team rows
+                continue
+            begin_year = int(season.split('-')[0])
+            key = (begin_year, team)
+            filtered = {}
+            for k,v in row.iteritems():
+                if k.lower() in pop_keys:
+                    continue
+                if not isinstance(v, float):
+                    try:
+                        v = float(v)
+                    except ValueError as e:
+                        print "Couldn't convert %s: %s to float" % (k,v)
+                        v = None
+                filtered[k] = v
+            by_year_team[key].append(filtered)
+
+        # scrape pbp
+        pbp_table = pbp_div.table
+        pbp_table.tfoot.extract()
+        # remove the first header row
+        header_rows = pbp_table.thead('tr')
+        header_rows[0].extract()
+        pbp_table.thead.unwrap()
+        pbp_table.tbody.unwrap()
+        pbp_stats = self.convert_html_table_to_dict(pbp_table, use_data_stat=True)
+        for row in pbp_stats:
+            season = row['season']
+            team = row['team_id']
+            if team.upper() == 'TOT':
+                # means the season was split between teams, just save team rows
+                continue
+            begin_year = int(season.split('-')[0])
+            key = (begin_year, team)
+            filtered = {}
+            for k,v in row.iteritems():
+                if k.lower() in pop_keys:
+                    continue
+                if not isinstance(v, float):
+                    try:
+                        if '%' in str(v):
+                            v = float(str(v).replace('%','').strip()) / 100.0
+                        else:
+                            v = float(v)
+                    except ValueError as e:
+                        print "Couldn't convert %s: %s to float" % (k,v)
+                        v = None
+                filtered[k] = v
+            by_year_team[key].append(filtered)
+
+        convert_keys = {'pct_1' : 'pct_pg',
+                        'pct_2' : 'pct_sg',
+                        'pct_3' : 'pct_sf',
+                        'pct_4' : 'pct_pf',
+                        'pct_5' : 'pct_c'}
+
+        # save
+        for k, values in by_year_team.items():
+            print "%s: %s" % (k, len(values))
+            begin_year, team = k
+            all_values = {}
+            for v in values:
+                all_values.update(v)
+            # spoof end of season
+            end_season = datetime(day=1,month=7,year=begin_year+1)
+            all_values['player_id'] = pid
+            all_values['team_id'] = team.upper()
+            all_values['time'] = end_season
+            for oldk, newk in convert_keys.iteritems():
+                if oldk in all_values:
+                    all_values[newk] = all_values[oldk] if all_values[oldk] is not None else 0.0
+                    all_values.pop(oldk, None)
+            try:
+                self.logger.info("SAVING ADVANCED: %s, %s, %s" % (pid, team.upper(), end_season))
+                #print all_values
+                self.nba_conn.saveDocument(advanced_collection, all_values)
+            except DuplicateKeyError as e:
+                continue
 
     def itemExists(self, url):
         '''
         If the url is already in the db, skip it
         '''
         query = {"url": url}
-        result = self.nba_conn.findOne(self.player_collection, query=query)
+        result = self.nba_conn.findOne(player_collection, query=query)
         return bool(result)
 
     def crawlPage(self, url):

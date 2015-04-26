@@ -24,6 +24,9 @@ def updateNBARosterURLS(roster_urls):
     rcrawl = rosterCrawler(roster_urls)
     rcrawl.run()
 
+def saveNBADepthChart():
+    dcrawl = depthCrawler()
+    dcrawl.run()
 
 def crawlNBATrackingStats():
     pullup_address = ("pullup", "http://stats.nba.com/js/data/sportvu/pullUpShootData.js")
@@ -81,9 +84,22 @@ def crawlNBATrackingStats():
         except DuplicateKeyError as e:
             print "%s espn player stats already saved" % today
 
-
-
 def translatePlayerNames(player_list):
+    player_dicts = {}
+    unmatched = []
+    for d in player_list:
+        query = createPlayerRegex(d)
+        full_matched = player_collection.find_one({'full_name' : {'$regex' : query}})
+        nick_matched = player_collection.find_one({'nickname' : {'$regex' : query}})
+        if nick_matched or full_matched:
+            match_obj = nick_matched or full_matched # value nickname matches more
+            player_dicts[d] = match_obj
+        else:
+            print "%s, no match: %s" % (d, query)
+            unmatched.append(d)
+    return player_dicts
+
+def createPlayerRegex(raw_string):
     '''
     Includes Hardcoded translations
     '''
@@ -93,48 +109,155 @@ def translatePlayerNames(player_list):
                     "CJ": "C.J.",
                     "TJ": "T.J.",
                     "PJ": "P.J."}
-
-    player_dicts = {}
-    for d in player_list:
-        name_parts = [x.strip() for x in d.split(' ') if x.strip()]
-        query = ''
-        for p in name_parts:
-            if p in translations:
-                p = translations[p]
-            query += '.*%s' % p.replace('.','.*')
-        if query:
-            query += '.*'
-        full_matched = player_collection.find_one({'full_name' : {'$regex' : re.compile(query)}})
-        nick_matched = player_collection.find_one({'nickname' : {'$regex' : re.compile(query)}})
-        if nick_matched or full_matched:
-            match_obj = nick_matched or full_matched # value nickname matches more
-            player_dicts[d] = match_obj
-        else:
-            print "%s, no match: %s" % (d, query)
-    return player_dicts
+    query = ''
+    name_parts = [x.strip() for x in raw_string.split(' ') if x.strip()]
+    for p in name_parts:
+        if p in translations:
+            p = translations[p]
+        query += '.*%s' % p.replace('.','.*')
+    if query:
+        query += '.*'
+    return re.compile(query)
 
 def translateTeamNames(team_list):
-    '''
-    Includes hardcoded translatiions
-    '''
-    translations = {"LA": "Los Angeles"}
-
     team_dicts = {}
     for t in team_list:
-        name_parts = [x.strip() for x in t.split(' ') if x.strip()]
-        query = ''
-        for p in name_parts:
-            if p in translations:
-                p = translations[p]
-            query += '.*%s' % p.replace('.','.*')
-        if query:
-            query += '.*'
-        matched = team_collection.find_one({'name' : {'$regex' : re.compile(query)}})
-        if matched:
-            team_dicts[t] = matched["_id"]
+        query = createTeamRegex(t)
+        matched = list(team_collection.find({'name' : {'$regex' : query}}))
+        if len(matched) == 1:
+            team_dicts[t] = matched[0]["_id"]
+        elif len(matched) > 1:
+            matchrank = defaultdict(list)
+            # choose match with the most recent name
+            for m in matched:
+                m_names = m['name']
+                for i, name in enumerate(m_names):
+                    if re.search(query, name):
+                        matchrank[i].append(m['_id'])
+                        break
+            best_rank_key = sorted(matchrank.keys())[0]
+            best_rank_matches = matchrank[best_rank_key]
+            if len(best_rank_matches) == 1:
+                team_dicts[t] = best_rank_matches[0]
+            else:
+                print "%s, ambiguous match: %s" % (t, best_rank_matches)
         else:
             print "%s, no match %s" % (t, query)
     return team_dicts
+
+def createTeamRegex(raw_string):
+    '''
+    Includes hardcoded translatiions
+    '''
+    translations = {"LA": "Los Angeles",
+                    "NO/Oklahoma": "New Orleans/Oklahoma"}
+
+    name_parts = [x.strip() for x in raw_string.split(' ') if x.strip()]
+    query = ''
+    for p in name_parts:
+        if p in translations:
+            p = translations[p]
+        query += '.*%s' % p.replace('.','.*')
+    if query:
+        query += '.*'
+    return re.compile(query)
+
+
+class depthCrawler(Crawler):
+
+    INIT_PAGE = "http://espn.go.com/nba/depth/_/type/print"
+
+    def __init__(self, logger=None):
+        super(depthCrawler, self).__init__(logger=logger)
+        self.name = "depthCrawler"
+
+    def run(self):
+        if not self.logger:
+            self.createLogger()
+        self.logger.info("URL: %s" % self.INIT_PAGE)
+        try:
+            soup = self.getContent(self.INIT_PAGE)
+        except Exception as e:
+            self.logger.exception("%s no content: %s" % (self.INIT_PAGE,e))
+            return False
+
+        date = soup.find("font", class_="date").text.strip()
+        date_obj = datetime.strptime("April 13, 2015", "%B %d, %Y")
+
+        to_save = {"time" : date_obj,
+                   "invalids": [],
+                   "stats": {}}
+
+        tables = soup.find_all("table")
+        depth_table = tables[1]
+        depth_cols = depth_table.find_all("td", class_="verb10")
+        depth = {}
+
+        # get all the team names and get the translations
+        raw_teams = []
+        for d in depth_cols:
+            contents = d.font.contents
+            team_name = contents[0].text.strip()
+            raw_teams.append(team_name)
+        teamnames = translateTeamNames(raw_teams)
+
+        # parse the depth charts
+        for d in depth_cols:
+            contents = d.font.contents
+            team_name = contents[0].text.strip()
+            team_id = teamnames[team_name]
+
+            # get the team roster
+            team_roster = team_collection.find_one({"_id" : team_id})['players']
+            team_roster_dict = {_ : player_collection.find_one({"_id" : _}) for _ in team_roster}
+
+            # parse depth
+            team_depth = [_.strip() for _ in contents[1].text.split('\n') if _]
+            team_results = defaultdict(list)
+            for raw_string in team_depth:
+                parts = raw_string.split('-')
+                pos = parts[0][:-1].lower()
+                pos_rank = int(parts[0][-1])
+                name = parts[1]
+
+                # check injury
+                injured = False
+                if '(IL)' in name:
+                    name = name.replace('(IL)','').strip()
+                    injured = True
+
+                # translate the name
+                query = createPlayerRegex(name)
+                translated_pid = None
+                for pid, pid_row in team_roster_dict.iteritems():
+                    # check if regex matches full name or nickname
+                    if query.search(pid_row['full_name']) or query.search(pid_row['nickname']):
+                        translated_pid = pid
+                        break
+                if not translated_pid:
+                    self.logger.info("Could not match %s with %s roster" % (name, team_id))
+                    continue
+
+                team_results[pos].append((translated_pid, pos_rank))
+
+                if injured:
+                    to_save['invalids'].append(translated_pid)
+
+            depth[team_id] = {}
+            for k,v in team_results.items():
+                sorted_pos = sorted(v, key=lambda x: x[1])
+                depth[team_id][k] = [_[0] for _ in sorted_pos]
+
+        to_save['stats'] = depth
+
+        # save
+        try:
+            nba_conn.saveDocument(espn_depth_collection, to_save)
+        except DuplicateKeyError as e:
+            print "espn depth chart already saved for the day"
+        
+        return to_save
+
 
 class rosterCrawler(Crawler):
 
@@ -150,11 +273,14 @@ class rosterCrawler(Crawler):
             self.createLogger()
         self.logger.info("URLS: %s" % self.urls)
         for name, url in self.urls.iteritems():
-            print url
             team_row = team_collection.find_one({"name":str(name).strip()})
             if not team_row:
                 raise Exception("Could not find %s" % name)
-            soup = self.visit(url)
+            try:
+                soup = self.getContent(url)
+            except Exception as e:
+                self.logger.exception("%s no content: %s" % (url,e))
+                continue
             odds = soup('tr', class_="oddrow")
             evens = soup('tr', class_="evenrow")
             pnames = []
@@ -164,22 +290,7 @@ class rosterCrawler(Crawler):
             player_ids = [v["_id"] for k,v in player_dicts.iteritems()]
             team_row['players'] = player_ids
             team_collection.save(team_row)
-            print "Saved %s roster: %s" % (name, player_ids)
-
-    def visit(self, url):
-        '''
-        Check if the url has been visited,
-        if not, grab content and convert to soup
-        '''
-        try:
-            init_response = requests.get(url, timeout=10)
-            init_content = init_response.content
-            init_soup = BeautifulSoup(init_content)
-        except Exception as e:
-            self.logger.info("%s no content: %s" % (url,e))
-            return False
-        return init_soup
-
+            self.logger.info("Saved %s roster: %s" % (name, player_ids))
 
 class upcomingGameCrawler(Crawler):
 
@@ -293,6 +404,7 @@ if __name__=="__main__":
     today = datetime.now() + timedelta(int(1))
     gl_crawl = upcomingGameCrawler(date=[today])
     gl_crawl.crawlPage()
-    '''
     crawlNBATrackingStats()
+    '''
+    saveNBADepthChart()
 

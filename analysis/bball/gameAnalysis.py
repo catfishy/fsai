@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 
 from statsETL.db.mongolib import *
 from analysis.bball.train import *
-from analysis.bball.playerAnalysis import featureExtractor, findAllTrainingGames
+from analysis.bball.playerAnalysis import findAllTrainingGames
 from analysis.bball.rosterAnalysis import FanDuelOptimalRoster
 from analysis.util.kimono import *
 
