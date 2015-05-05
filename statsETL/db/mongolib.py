@@ -78,8 +78,8 @@ class MongoConn:
         index = coll.create_index(index_args)
         return index
 
-    def ensureIndex(self, coll, index_args, unique=False):
-        index = coll.create_index(index_args, unique=unique)
+    def ensureIndex(self, coll, index_args, unique=False, sparse=False):
+        index = coll.create_index(index_args, unique=unique, sparse=sparse)
         return index
 
     def bulkInsert(self, coll, docs):
@@ -111,6 +111,8 @@ espn_stat_collection = nba_conn.getCollection("espnstats") # for espn team stats
 espn_player_stat_collection = nba_conn.getCollection("espnplayerstats")
 espn_depth_collection = nba_conn.getCollection("depthcharts")
 advanced_collection = nba_conn.getCollection("advanced")
+onoff_collection = nba_conn.getCollection("onoff")
+two_man_collection = nba_conn.getCollection("two_man")
 
 # ensure indices
 nba_conn.ensureIndex(team_collection, [("url", 1)])
@@ -127,4 +129,5 @@ nba_conn.ensureIndex(espn_stat_collection, [('time', 1)], unique=True)
 nba_conn.ensureIndex(espn_player_stat_collection, [("player_id", 1),('time', 1)], unique=True)
 nba_conn.ensureIndex(espn_depth_collection, [('time', 1)], unique=True)
 nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
-
+nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
+nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)

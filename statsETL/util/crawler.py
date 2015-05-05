@@ -125,7 +125,7 @@ class Crawler(object):
     def get_whitelist(cls):
         return cls.WHITELIST
 
-    def convert_html_table_to_dict(self, table, use_data_stat=False):
+    def convert_html_table_to_dict(self, table, use_data_stat=False, use_csk=False):
         dict_list = []
         rows = table('tr',recursive=False)
         header_row = rows[0]
@@ -136,7 +136,17 @@ class Crawler(object):
         headers = [h.strip() if h else u'' for h in headers]
         for row in rows[1:]:
             cols = row('td',recursive=False)
-            values = [col.text for col in cols if type(col) == element.Tag]
+            if use_csk:
+                values = []
+                for col in cols:
+                    if type(col) == element.Tag:
+                        try:
+                            v = col['csk']
+                        except KeyError as e:
+                            v = None
+                        values.append(v)
+            else:
+                values = [col.text for col in cols if type(col) == element.Tag]
             for i, v in enumerate(values):
                 try:
                     values[i] = float(v)
@@ -185,9 +195,11 @@ class Crawler(object):
         Check if the url has been visited,
         if not, grab content and convert to soup
         '''
+        self.url_check_lock.acquire()
         # check if in visited
         if url in self.visited:
             self.logger.info("%s already visited" % url)
+            self.url_check_lock.release()
             return False
         # get content
         try:
@@ -195,7 +207,9 @@ class Crawler(object):
             self.visited.add(url)
         except Exception as e:
             self.logger.info("%s no content: %s" % (url,e))
+            self.url_check_lock.release()
             return False
+        self.url_check_lock.release()
         return init_soup
 
     def getContent(self, url):

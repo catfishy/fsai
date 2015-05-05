@@ -132,9 +132,7 @@ class teamCrawler(Crawler):
             self.logger.info("%s already crawled in past, skipping" % url)
             return False
 
-        self.url_check_lock.acquire()
         soup = self.checkVisit(url)
-        self.url_check_lock.release()
 
         if not soup:
             return False
@@ -434,7 +432,7 @@ class gameCrawler(Crawler):
                     player_game_stats[d['player_id']] = d
 
                 # CRAWL PLAYER IF PLAYER NOT IN DATABASE
-                if not player_collection.find_one(d['player_id']):
+                if not player_collection.find_one({"_id" : d['player_id']}):
                     pid = d['player_id']
                     # recreate url
                     add_on = "%s/%s.html" % (pid[0], pid)
@@ -497,7 +495,7 @@ class gameCrawler(Crawler):
         '''
         # sum the scoring stats by team
         to_norm = ["FT", "3P", "TOV", "FG", "3PA", "DRB", "AST", "PF", 
-                   "PTS", "FG", "STL", "TRB", "FTA", "BLK", "ORB"]
+                   "PTS", "FGA", "STL", "TRB", "FTA", "BLK", "ORB"]
         team_sum_keys = ['FGA', 'FT', 'FTA', 'AST', 'MP', 'PTS', 'ORB', 'TRB', 'DRB' ,'TOV', '3P', 'STL', 'BLK', 'PF', 'FG']
         team_stats = {}
         for row in team_scoring_stats:
@@ -597,11 +595,10 @@ class gameCrawler(Crawler):
 
     def checkDateLimit(self, url):
         boxscore_regex = re.compile("/boxscores/[0-9]+")
-        #"index.cgi?month=%s&day=%s&year=%s"
+
         # filter irrelevant urls
-        if "index.cgi" not in url and '/boxscores/' not in url:
-            return True
-        if not boxscore_regex.search(url):
+        #"index.cgi?month=%s&day=%s&year=%s"
+        if not (boxscore_regex.search(url) or ("index.cgi" in url and '/boxscores/' in url)):
             return True
 
         if "index.cgi" in url:
@@ -636,11 +633,9 @@ class gameCrawler(Crawler):
         if not self.refresh and self.itemExists(url):
             self.logger.info("%s already crawled in past, skipping" % url)
             return False
-        time.sleep(0.1)
 
-        self.url_check_lock.acquire()
+        time.sleep(0.1)
         soup = self.checkVisit(url)
-        self.url_check_lock.release()
 
         if not soup:
             return False
@@ -745,6 +740,7 @@ class playerCrawler(Crawler):
                 elif title == 'position':
                     text = title_tag.next_sibling.strip().lower()
                     text = text.replace(u"\xa0\u25aa", u' ').strip()
+                    text = text.replace("guard/forward", 'sg and sf')
                     text = text.replace('small forward','sf')
                     text = text.replace('power forward','pf')
                     text = text.replace('shooting guard','sg')
@@ -771,7 +767,140 @@ class playerCrawler(Crawler):
         except Exception as e:
             self.logger.exception("Error crawling advanced stats for %s" % player_id)
 
+        # try crawling on/off stats (urls that include /on-off/)
+        try:
+            self.crawlOnOffStats(player_id, soup)
+        except Exception as e:
+            self.logger.exception("Error crawling on-off stats for %s" % player_id)
+
+        # try crawling lineup stats (urls that include /lineups/)
+        try:
+            self.crawlLineupStats(player_id, soup)
+        except Exception as e:
+            self.logger.exception("Error crawling lineup stats for %s" % player_id)
+
         return data
+
+    def crawlOnOffStats(self, pid, soup):
+        links = soup.find_all(href=re.compile("/on-off/"))
+        to_save = []
+        for l in links:
+            href = l['href']
+            # get year
+            try:
+                year = int([_ for _ in href.split('/') if _][-1])
+            except ValueError as e:
+                continue
+            # get content
+            full = self.LINK_BASE + href
+            content = self.getContent(full)
+            div = content.find(id="div_on-off")
+            table = div.table
+            # remove the first header row, and superfluous thead sections
+            header_sections = table.find_all('thead')
+            for extra_header in header_sections[1:]:
+                extra_header.extract()
+            header_rows = table.thead('tr')
+            header_rows[0].extract()
+            table.thead.unwrap()
+            table.tbody.unwrap()
+            onoff_stats = self.convert_html_table_to_dict(table, use_data_stat=True)
+            # interested in rows where Split is "On - Off"
+            for stat_row in onoff_stats:
+                split_label = stat_row.pop('split_id', '')
+                if 'On' in split_label and 'Off' in split_label:
+                    # convert to floats and save it
+                    for k,v in stat_row.iteritems():
+                        if not isinstance(v, float) and v is not None:
+                            v = str(v).replace('+','')
+                            try:
+                                if '%' in v:
+                                    v = float(v.replace('%','').strip()) / 100.0
+                                else:
+                                    v = float(v)
+                            except ValueError as e:
+                                pass
+                                #print "Couldn't convert %s: %s to float" % (k,v)
+                            stat_row[k] = v
+                    stat_row['year'] = year
+                    stat_row['player_id'] = pid
+                    to_save.append(stat_row)
+        # save
+        for save_row in to_save:
+            # spoof end of season
+            end_season = datetime(day=1,month=7,year=save_row['year'])
+            save_row['time'] = end_season
+            try:
+                self.logger.info("SAVING ONOFF: %s" % (save_row))
+                #print all_values
+                self.nba_conn.saveDocument(onoff_collection, save_row)
+            except DuplicateKeyError as e:
+                continue
+
+    def crawlLineupStats(self, pid, soup):
+        links = soup.find_all(href=re.compile("/lineups/"))
+        to_save = []
+        for l in links:
+            href = l['href']
+            # get year
+            try:
+                year = int([_ for _ in href.split('/') if _][-1])
+            except ValueError as e:
+                continue
+            # get content
+            full = self.LINK_BASE + href
+            content = self.getContent(full)
+            div = content.find(id='div_lineups-2-man')
+            table = div.table
+            # remove first header row
+            header_rows = table.thead('tr')
+            header_rows[0].extract()
+            table.thead.unwrap()
+            table.tbody.unwrap()
+            lineup_stats = self.convert_html_table_to_dict(table, use_data_stat=True, use_csk=True)
+            for stat_row in lineup_stats:
+                pids = stat_row.pop('lineup', '')
+                if pids == 'Player Average':
+                    pid_list = [pid]
+                else:
+                    pid_list = pids.split(':')
+                # convert to floats and save it
+                for k,v in stat_row.iteritems():
+                    if not isinstance(v, float) and v is not None:
+                        v = str(v).replace('+','')
+                        try:
+                            if '%' in v:
+                                v = float(v.replace('%','').strip()) / 100.0
+                            else:
+                                v = float(v)
+                        except ValueError as e:
+                            pass
+                            #print "Couldn't convert %s: %s to float" % (k,v)
+                        stat_row[k] = v
+                stat_row['year'] = year
+                stat_row['players'] = pid_list
+                to_save.append(stat_row)
+        # save
+        for save_row in to_save:
+            # spoof end of season
+            end_season = datetime(day=1,month=7,year=save_row['year'])
+            save_row['time'] = end_season
+            # sort players and rearrange into player_one and player_two keys
+            players = save_row.pop("players",[])
+            players = sorted(players)
+            if len(players) == 1:
+                save_row['player_one'] = players[0]
+                save_row['player_two'] = None
+            elif len(players) == 2:
+                save_row['player_one'] = players[0]
+                save_row['player_two'] = players[1]
+            try:
+                self.logger.info("SAVING two man combo: %s" % (save_row))
+                #print all_values
+                self.nba_conn.saveDocument(two_man_collection, save_row)
+            except DuplicateKeyError as e:
+                #self.logger.exception(e)
+                continue
 
     def crawlAdvancedStats(self, pid, soup):
         by_year_team = defaultdict(list)
@@ -798,12 +927,15 @@ class playerCrawler(Crawler):
             for k,v in row.iteritems():
                 if k.lower() in pop_keys:
                     continue
-                if not isinstance(v, float):
+                if not isinstance(v, float) and v is not None:
                     try:
                         v = float(v)
                     except ValueError as e:
-                        print "Couldn't convert %s: %s to float" % (k,v)
-                        v = None
+                        if len(v) == 0:
+                            v = None
+                        else:
+                            pass
+                            #print "Couldn't convert %s: %s to float" % (k,v)
                 filtered[k] = v
             by_year_team[key].append(filtered)
 
@@ -829,12 +961,15 @@ class playerCrawler(Crawler):
             for k,v in row.iteritems():
                 if k.lower() in pop_keys:
                     continue
-                if not isinstance(v, float):
+                if not isinstance(v, float) and v is not None:
                     try:
                         v = float(v)
                     except ValueError as e:
-                        print "Couldn't convert %s: %s to float" % (k,v)
-                        v = None
+                        if len(v) == 0:
+                            v = None
+                        else:
+                            pass
+                            #print "Couldn't convert %s: %s to float" % (k,v)
                 filtered[k] = v
             by_year_team[key].append(filtered)
 
@@ -859,15 +994,18 @@ class playerCrawler(Crawler):
             for k,v in row.iteritems():
                 if k.lower() in pop_keys:
                     continue
-                if not isinstance(v, float):
+                if not isinstance(v, float) and v is not None:
                     try:
                         if '%' in str(v):
                             v = float(str(v).replace('%','').strip()) / 100.0
                         else:
                             v = float(v)
                     except ValueError as e:
-                        print "Couldn't convert %s: %s to float" % (k,v)
-                        v = None
+                        if len(v) == 0:
+                            v = None
+                        else:
+                            pass
+                            #print "Couldn't convert %s: %s to float" % (k,v)
                 filtered[k] = v
             by_year_team[key].append(filtered)
 
@@ -879,7 +1017,7 @@ class playerCrawler(Crawler):
 
         # save
         for k, values in by_year_team.items():
-            print "%s: %s" % (k, len(values))
+            #print "%s: %s" % (k, len(values))
             begin_year, team = k
             all_values = {}
             for v in values:
@@ -916,11 +1054,9 @@ class playerCrawler(Crawler):
         if not self.refresh and self.itemExists(url):
             self.logger.info("%s already crawled in past, skipping" % url)
             return False
-        time.sleep(0.1)
 
-        self.url_check_lock.acquire()
+        time.sleep(0.1)
         soup = self.checkVisit(url)
-        self.url_check_lock.release()
 
         if not soup:
             return False
