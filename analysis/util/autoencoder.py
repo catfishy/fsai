@@ -38,7 +38,6 @@ import cPickle
 import math
 
 import numpy
-from sklearn import cross_validation
 import theano
 import theano.tensor as T
 from theano.tensor.shared_randomstreams import RandomStreams
@@ -47,8 +46,7 @@ try:
 except ImportError:
     import Image
 
-from analysis.bball.playerAnalysis import findAllTrainingGames, featureExtractor
-from analysis.bball.train import DataPreprocessor
+from analysis.bball.playerAnalysis import *
 from statsETL.db.mongolib import *
 
 
@@ -261,12 +259,13 @@ class dA(object):
 
         return (cost, updates)
 
+
 def factors(n):
     return list(([i, n//i] for i in range(1, int(n**0.5) + 1) if n % i == 0))
 
 
 def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15, 
-             batch_size=20, output_folder='nba_dA_plots'):
+             corruption=0.35, batch_size=20, output_folder='nba_dA_plots'):
     train_set_x, train_set_y = train_set
 
     # compute number of minibatches for training, validation and testing
@@ -281,7 +280,7 @@ def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15,
     os.chdir(output_folder)
 
     # determine tile size
-    n_hidden = 500
+    n_hidden = 1000
     f = factors(len(labels))
     tile_f = factors(n_hidden)
     dims = tuple(f[-1])
@@ -289,10 +288,6 @@ def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15,
     
     print "n_visible: %s, n_hidden: %s, dims: %s, tile dims: %s" % (len(labels), n_hidden, dims, tile_dims)
 
-    ####################################
-    # BUILDING THE MODEL NO CORRUPTION #
-    ####################################
-    '''
     rng = numpy.random.RandomState(123)
     theano_rng = RandomStreams(rng.randint(2 ** 30))
 
@@ -305,65 +300,7 @@ def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15,
     )
 
     cost, updates = da.get_cost_updates(
-        corruption_level=0.,
-        learning_rate=learning_rate
-    )
-
-    train_da = theano.function(
-        [index],
-        cost,
-        updates=updates,
-        givens={
-            x: train_set_x[index * batch_size: (index + 1) * batch_size]
-        }
-    )
-
-    start_time = time.clock()
-
-    ############
-    # TRAINING #
-    ############
-
-    # go through training epochs
-    for epoch in xrange(training_epochs):
-        # go through trainng set
-        c = []
-        for batch_index in xrange(n_train_batches):
-            c.append(train_da(batch_index))
-            #print x.get_value()
-            #print updates.get_value()
-        print 'Training epoch %d, cost ' % epoch, numpy.mean(c)
-
-    end_time = time.clock()
-
-    training_time = (end_time - start_time)
-
-    print >> sys.stderr, ('The no corruption code for file ' +
-                          os.path.split(__file__)[1] +
-                          ' ran for %.2fm' % ((training_time) / 60.))
-    image = Image.fromarray(
-        tile_raster_images(X=da.W.get_value(borrow=True).T,
-                           img_shape=dims, tile_shape=(10, 10),
-                           tile_spacing=(1, 1)))
-    image.save('filters_corruption_0.png')
-    '''
-    #####################################
-    # BUILDING THE MODEL CORRUPTION 30% #
-    #####################################
-
-    rng = numpy.random.RandomState(123)
-    theano_rng = RandomStreams(rng.randint(2 ** 30))
-
-    da = dA(
-        numpy_rng=rng,
-        theano_rng=theano_rng,
-        input=x,
-        n_visible=len(labels),
-        n_hidden=n_hidden
-    )
-
-    cost, updates = da.get_cost_updates(
-        corruption_level=0.35,
+        corruption_level=corruption,
         learning_rate=learning_rate
     )
 
@@ -396,7 +333,7 @@ def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15,
 
     training_time = (end_time - start_time)
 
-    print >> sys.stderr, ('The 30% corruption code for file ' +
+    print >> sys.stderr, ('The corruption code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %.2fm' % (training_time / 60.))
 
@@ -404,7 +341,9 @@ def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15,
         X=da.W.get_value(borrow=True).T,
         img_shape=dims, tile_shape=tile_dims,
         tile_spacing=(1, 1)))
-    image.save('filters_corruption_30.png')
+    image.save('filters_corruption.png')
+
+    return da
 
 
 def test_dA(learning_rate=0.1, training_epochs=15,
@@ -761,67 +700,7 @@ def tile_raster_images(X, img_shape, tile_shape, tile_spacing=(0, 0),
                     ] = this_img * c
         return out_array
 
-def getNBATrainingData(file_path=None):
-    if file_path and os.path.isfile(file_path):
-        f = open(file_path, 'rb')
-        labels, train_set, test_set = cPickle.load(f)
-        f.close()
-    else:
-        cat_X = []
-        cont_X = []
-        Y = []
-        ts_X = []
-        cat_labels = None
-        cont_labels = None
-        cat_splits = None
-
-        pids = player_collection.find({})
-        player_games = player_game_collection.find({})
-        for pgame in player_games:
-            if pgame['MP'] == 0.0:
-                continue
-            pid = str(pgame['player_id'])
-            gid = str(pgame['game_id'])
-            try:
-                fext = featureExtractor(pid, target_game=gid) 
-                cat_labels, cat_features, cont_labels, cont_features, cat_splits = fext.runEncoderFeatures()
-            except Exception as e:
-                print "Exception getting encoder input for pid %s, game %s: %s" % (pid, gid, e)
-                continue
-            ts = fext.timestamp()
-            y = fext.getY('PTS') # just a filler y key
-            ts_X.append(ts)
-            cat_X.append(cat_features)
-            cont_X.append(cont_features)
-            Y.append(y)
-
-        # normalize the data
-        proc = DataPreprocessor(ts_X, cont_labels, cont_X, cat_labels, cat_X, Y, 
-                                cat_kernel_splits=cat_splits, weigh_recent=False, 
-                                weigh_outliers=False, clamp=(0,1))
-        X = proc.getAllSamples()
-        print X[0]
-        Y = proc.getY()
-        labels = proc.getFeatureLabels()
-
-        # split into train and test
-        X_train, X_test, Y_train, Y_test = cross_validation.train_test_split(X, Y, test_size=0.25)
-        train_set = (X_train, Y_train)
-        test_set = (X_test, Y_test)
-        if file_path:
-            # save
-            cPickle.dump((labels, train_set, test_set), open(file_path,'wb'))
-    print "Trains: %s" % (len(train_set[0]))
-    print "Tests: %s" % (len(test_set[0]))
-    test_set_x, test_set_y = shared_dataset(test_set)
-    train_set_x, train_set_y = shared_dataset(train_set)
-    rval = [labels, (train_set_x, train_set_y), (test_set_x, test_set_y)]
-    return rval
 
 if __name__ == '__main__':
-    
-    data_path = '/usr/local/fsai/analysis/data/nba_pts'
-    labels, train_set, test_set = getNBATrainingData(file_path=data_path)
-    train_dA(labels, train_set, learning_rate=0.15, training_epochs=100, batch_size=10, output_folder='dA_plots')
-    
-    #test_dA()
+    pass
+

@@ -12,9 +12,14 @@ from collections import defaultdict
 import copy
 import itertools
 import traceback
+import csv
+import os
+import multiprocessing as mp
+import re
 
 import numpy as np
 from scipy.spatial import distance
+import matplotlib.pyplot as plt
 
 from statsETL.db.mongolib import *
 
@@ -25,7 +30,7 @@ def findAllTrainingGames(pid=None, limit=None, time=None, min_count=None):
     if pid:
         query["player_id"] = pid
     if time:
-        query["game_time"] = {"$lt" : time}
+        query["game_time"] = {"$gt" : time}
     print "Training game query: %s" % query
     playergames = player_game_collection.find(query)
 
@@ -40,11 +45,11 @@ def findAllTrainingGames(pid=None, limit=None, time=None, min_count=None):
         new_arg['target_game'] = str(game['game_id'])
         args.append(new_arg)
         # limit
-        if limit and len(valid_games) == limit:
+        if limit and len(args) == limit:
             break
 
     # check above min
-    if min_count and len(valid_games) < min_count:
+    if min_count and len(args) < min_count:
         raise Exception("Couldn't find more than %s games for %s" % (min_count, pid))
     
     return args
@@ -72,15 +77,15 @@ class NBAFeatureExtractor(object):
     # PLAYER STATS
     PLAYER_STATS = ["STL%", "ORB%", "BLK%", "FT%", "3PAr", "FG%", 
                     "TOV%", "AST%", "eFG%", "FTr", "+/-", "USG%", "DRB%", "TS%", "MP", "DRtg", "ORtg", "TRB%", 
-                    "3P%", "PTS/FGA", "FTA/FGA","FT_per100poss", "3P_per100poss", "TOV_per100poss", "FG_per100poss", "3PA_per100poss", 
+                    "3P%", "PTS/FGA", "FT_per100poss", "3P_per100poss", "TOV_per100poss", "FG_per100poss", "3PA_per100poss", 
                     "DRB_per100poss", "AST_per100poss", "PTS_per100poss", "FGA_per100poss", 
                     "STL_per100poss", "TRB_per100poss", "FTA_per100poss", "BLK_per100poss", "ORB_per100poss", 
                     'StopPercent', 'Stops', 'PProd', 'FloorPercent', 'TotPoss']
     # PTS/FGA = PTS / FGA
-    # FTA/FGA = FTA/FGA
+    # FTA/FGA = FTA/FGA ::: REDUNDANT (FTr)
     OPP_PLAYER_STATS = ['DRtg', 'USG%', 'TOV%', 'BLK%', 'STL%', 'TRB%', 'ORB%', 
                         'DRB%', 'FTr', 'TS%', 'eFG%', 'ORtg', '3PAr', 
-                        'StopPercent', 'Stops', 'PProd', 'FloorPercent', 'TotPoss']
+                        'StopPercent', 'FloorPercent']
     ADVANCED_STATS = ['PER', 'OWS', 'DWS', 'WS', 'WS/48', 'OBPM', 'DBPM', 'BPM', 'VORP',
                       'pct_pg', 'pct_sg', 'pct_sf', 'pct_pf', 'pct_c', 'plus_minus_on', 'plus_minus_net',
                       'tov_bad_pass', 'tov_lost_ball', 'tov_other',
@@ -91,8 +96,7 @@ class NBAFeatureExtractor(object):
                       'fg3_pct_ast', 'fg3_pct_corner', 'pct_fg3a_corner',
                       'fg2_pct_ast', 'pct_fg2_dunk']
     OPP_ADVANCED_STATS = ['PER', 'OWS', 'DWS', 'WS', 'WS/48', 'OBPM', 'DBPM', 'BPM', 'VORP',
-                          'pct_pg', 'pct_sg', 'pct_sf', 'pct_pf', 'pct_c', 'plus_minus_on', 'plus_minus_net',
-                          'tov_bad_pass', 'tov_lost_ball', 'tov_other',
+                          'plus_minus_on', 'plus_minus_net', 'tov_bad_pass', 'tov_lost_ball', 'tov_other',
                           'fouls_shooting', 'fouls_blocking', 'fouls_offensive', 'fouls_take',
                           'and1s', 'astd_pts', 'fga_blkd', 'drawn_shooting']
     POS_ALLOWED_STATS = ['FG_per100poss', 'FG%', '3P_per100poss', '3P%', 'FTr', 'TRB%', 'AST%', 'STL%', 'BLK%', 
@@ -143,7 +147,7 @@ class NBAFeatureExtractor(object):
 
             self.ts = self.target_game_info['time']
 
-            self.invalids.extend(self.target_game_info['inactive'])
+            self.invalids.extend(self.target_game_info.get('inactive',[]))
 
             # check that team is in the game
             self.team_game_info = team_game_collection.find_one({"game_id" : self.target_game_id,
@@ -177,6 +181,10 @@ class NBAFeatureExtractor(object):
         # grab team rows
         self.own_team = team_collection.find_one({"all_ids": self.own_team_id})
         self.opp_team = team_collection.find_one({"all_ids": self.opp_team_id})
+        self.own_team_id = self.own_team['_id']
+        self.opp_team_id = self.opp_team['_id']
+        self.own_all_ids = self.own_team['all_ids']
+        self.opp_all_ids = self.opp_team['all_ids']
         self.home_team = self.own_team if (self.own_team_id == self.home_id) else self.opp_team
 
         # get start of season based on game timestamp (use most recent 8/1)
@@ -283,12 +291,12 @@ class NBAFeatureExtractor(object):
             # find starters
             home_starters = self.target_game_info['home_starters']
             away_starters = self.target_game_info['away_starters']
-            own_starters = home_starters if self.own_team_id == self.home_id else away_starters
-            opp_starters = home_starters if self.opp_team_id == self.home_id else away_starters
+            own_starters = home_starters if self.home_id in self.own_all_ids else away_starters
+            opp_starters = home_starters if self.home_id in self.opp_all_ids else away_starters
 
             # find bench players
-            opp_played = player_game_collection.find({"game_id" : self.target_game_info['_id'], "player_team" : self.opp_team_id})
-            own_played = player_game_collection.find({"game_id" : self.target_game_info['_id'], "player_team" : self.own_team_id})
+            opp_played = player_game_collection.find({"game_id" : self.target_game_info['_id'], "player_team" : {"$in" : self.opp_all_ids}})
+            own_played = player_game_collection.find({"game_id" : self.target_game_info['_id'], "player_team" : {"$in" : self.own_all_ids}})
             opp_pid = [_['player_id'] for _ in opp_played if _['MP'] > 0.0]
             own_pid = [_['player_id'] for _ in own_played if _['MP'] > 0.0]
 
@@ -327,10 +335,87 @@ class NBAFeatureExtractor(object):
             # add invalids
             self.invalids.extend(chart_invalids)
         
+        #print "Own: %s" % (own_starters+own_bench)
+        #print "Opp: %s" % (opp_starters+opp_bench)
+
+
         # determine play distributions for both rosters
-        play_distr = self.getPlayDistributions(own_starters + own_bench, self.own_team_id)
-        play_distr.update(self.getPlayDistributions(opp_starters + opp_bench, self.opp_team_id))
-        self.play_distr = play_distr
+        own_distr = self.getPlayDistributions(own_starters + own_bench, self.own_all_ids)
+        opp_distr = self.getPlayDistributions(opp_starters + opp_bench, self.opp_all_ids)
+        self.pos_distr = own_distr['Pos']
+        self.pos_distr.update(opp_distr['Pos'])
+        self.play_distr = own_distr['TotPoss']
+        self.play_distr.update(opp_distr['TotPoss'])
+        self.usg_distr = own_distr['USG%']
+        self.usg_distr.update(opp_distr['USG%'])
+        self.floor_distr = own_distr['PProd']
+        self.floor_distr.update(opp_distr['PProd'])
+        self.stop_distr = own_distr['Stops']
+        self.stop_distr.update(opp_distr['Stops'])
+
+        self.own_play_distr_sum = sum([np.array(self.play_distr[_]) for _ in own_starters+own_bench])
+        self.own_play_distr_sum /= sum(self.own_play_distr_sum)
+        self.own_usg_distr_sum = sum([np.array(self.usg_distr[_]) for _ in own_starters+own_bench])
+        self.own_usg_distr_sum /= sum(self.own_usg_distr_sum)
+        self.own_floor_distr_sum = sum([np.array(self.floor_distr[_]) for _ in own_starters+own_bench])
+        self.own_floor_distr_sum /= sum(self.own_floor_distr_sum)
+        self.own_stop_distr_sum = sum([np.array(self.stop_distr[_]) for _ in own_starters+own_bench])
+        self.own_stop_distr_sum /= sum(self.own_stop_distr_sum)
+        self.opp_play_distr_sum = sum([np.array(self.play_distr[_]) for _ in opp_starters+opp_bench])
+        self.opp_play_distr_sum /= sum(self.opp_play_distr_sum)
+        self.opp_usg_distr_sum = sum([np.array(self.usg_distr[_]) for _ in opp_starters+opp_bench])
+        self.opp_usg_distr_sum /= sum(self.opp_usg_distr_sum)
+        self.opp_floor_distr_sum = sum([np.array(self.floor_distr[_]) for _ in opp_starters+opp_bench])
+        self.opp_floor_distr_sum /= sum(self.opp_floor_distr_sum)
+        self.opp_stop_distr_sum = sum([np.array(self.stop_distr[_]) for _ in opp_starters+opp_bench])
+        self.opp_stop_distr_sum /= sum(self.opp_stop_distr_sum)
+
+
+
+        '''
+        print self.own_team_id
+        print "PLAYS: %s" % self.own_play_distr_sum
+        print "USG: %s" % self.own_usg_distr_sum
+        print "PPROD: %s" % self.own_floor_distr_sum
+        print "STOPS: %s" % self.own_stop_distr_sum
+        print self.opp_team_id
+        print "PLAYS: %s" % self.opp_play_distr_sum
+        print "USG: %s" % self.opp_usg_distr_sum
+        print "PPROD: %s" % self.opp_floor_distr_sum
+        print "STOPS: %s" % self.opp_stop_distr_sum
+
+        # test graph
+        fig1 = plt.figure()
+        p1 = plt.plot(self.own_play_distr_sum, marker='o', label='plays')
+        p2 = plt.plot(self.own_usg_distr_sum, marker='o', label='usg')
+        p3 = plt.plot(self.own_floor_distr_sum, marker='o', label='pprod')
+        p4 = plt.plot(self.own_stop_distr_sum, marker='o', label='stops')
+        fig1.suptitle(self.own_team_id, fontsize=20)
+        p_labels = plt.xticks(range(5), self.POSITIONS, rotation='vertical')
+        plt.legend(loc='best', shadow=True)
+
+        fig2 = plt.figure()
+        p1 = plt.plot(self.opp_play_distr_sum, marker='o', label='plays')
+        p2 = plt.plot(self.opp_usg_distr_sum, marker='o', label='usg')
+        p3 = plt.plot(self.opp_floor_distr_sum, marker='o', label='pprod')
+        p4 = plt.plot(self.opp_stop_distr_sum, marker='o', label='stops')
+        fig2.suptitle(self.opp_team_id, fontsize=20)
+        p_labels = plt.xticks(range(5), self.POSITIONS, rotation='vertical')
+        plt.legend(loc='best', shadow=True)
+
+        plt.show(block=True)
+        '''
+
+        # label the values
+        self.own_play_distr_sum = dict(zip(self.POSITIONS, self.own_play_distr_sum))
+        self.own_usg_distr_sum = dict(zip(self.POSITIONS, self.own_usg_distr_sum))
+        self.own_floor_distr_sum = dict(zip(self.POSITIONS, self.own_floor_distr_sum))
+        self.own_stop_distr_sum = dict(zip(self.POSITIONS, self.own_stop_distr_sum))
+        self.opp_play_distr_sum = dict(zip(self.POSITIONS, self.opp_play_distr_sum))
+        self.opp_usg_distr_sum = dict(zip(self.POSITIONS, self.opp_usg_distr_sum))
+        self.opp_floor_distr_sum = dict(zip(self.POSITIONS, self.opp_floor_distr_sum))
+        self.opp_stop_distr_sum = dict(zip(self.POSITIONS, self.opp_stop_distr_sum))
+
 
         # switch out invalid starters for bench player if needed
         for k in opp_starters:
@@ -358,10 +443,12 @@ class NBAFeatureExtractor(object):
                         own_starters.append(chosen)
                         break
 
+        '''
         print "Own Starters: %s" % own_starters
         print "Own Bench: %s" % own_bench
         print "Opp Starters: %s" % opp_starters
         print "Opp Bench: %s" % opp_bench
+        '''
 
         self.own_starters = own_starters
         self.own_bench = own_bench
@@ -378,17 +465,20 @@ class NBAFeatureExtractor(object):
         self.starting = self.CAT_ONE_HOT_ON if self.player_id in self.own_starters else self.CAT_ONE_HOT_OFF
 
 
-    def getAdvancedStatsForPlayer(self, player_id, team_id, filter_keys):
-        advanced_rows = list(advanced_collection.find({"player_id" : player_id, "team_id" : team_id, "time" : {"$gt" : self.season_start, "$lt" : self.season_start + timedelta(365)}}))
+    def getAdvancedStatsForPlayer(self, player_id, team_ids, filter_keys):
+        advanced_rows = list(advanced_collection.find({"player_id" : player_id, "team_id" : {"$in" : team_ids}, "time" : {"$gt" : self.season_start, "$lt" : self.season_start + timedelta(365)}}))
         if len(advanced_rows) == 0:
-            raise Exception("Could not find valid advanced stats row for %s, %s, %s" % (player_id, team_id, self.season_start))
+            raise Exception("Could not find valid advanced stats row for %s, %s, %s" % (player_id, team_ids, self.season_start))
         chosen_advanced_row = sorted(advanced_rows, key=lambda x: abs(self.ts - x['time']))[0]
         # normalize by 48 minutes for the specified keys
         mp = float(chosen_advanced_row["MP"])
         by36 = mp/36.0
         for k in self.GAME_NORM_STATS:
             if k in chosen_advanced_row:
-                normed = chosen_advanced_row.get(k,0.0) / by36
+                stat_value = chosen_advanced_row.get(k,0.0)
+                if stat_value is None:
+                    stat_value = 0.0
+                normed = stat_value / by36
                 chosen_advanced_row[k] = normed
         # filter keys
         player_advanced_stats = {k: chosen_advanced_row[k] for k in filter_keys}
@@ -415,17 +505,10 @@ class NBAFeatureExtractor(object):
             -> defensive/offensive stats given up (per position) for a running window, per 48
 
         '''
-        player_stats = player_game_collection.find({"player_id": self.player_id, "game_time": {"$lt": self.ts, "$gt": self.season_start}}, limit=10, sort=[("game_time",-1)])
+        player_stats = player_game_collection.find({"player_id": self.player_id, "player_team" : {"$in" : self.own_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.season_start}}, limit=10, sort=[("game_time",-1)])
         player_stats = self.calculateAdditionalPlayerStats(player_stats)
 
-        own_last_10_games = list(game_collection.find({"teams": self.own_team_id, "time" : {"$lt" : self.ts, "$gt" : self.season_start}}, limit=10, sort=[("time",-1)]))
-        opp_last_10_games = list(game_collection.find({"teams": self.opp_team_id, "time" : {"$lt" : self.ts, "$gt" : self.season_start}}, limit=10, sort=[("time",-1)]))
-
-        # check that we have enough statistics
-        if len(own_last_10_games) < 2:
-            raise Exception("Not enough previous games for own %s" % self.own_team_id)
-        if len(opp_last_10_games) < 2:
-            raise Exception("Not enough previous games for opp %s" % self.opp_team_id)
+        # check enough player stats
         if len(player_stats) < 2:
             raise Exception("Not enough previous games for player %s" % self.player_id)
 
@@ -448,12 +531,12 @@ class NBAFeatureExtractor(object):
         '''
 
         # get advanced stats
-        self.player_advanced_stats = self.getAdvancedStatsForPlayer(self.player_id, self.own_team_id, self.ADVANCED_STATS)
+        self.player_advanced_stats = self.getAdvancedStatsForPlayer(self.player_id, self.own_all_ids, self.ADVANCED_STATS)
 
         # get team effects (stat fractions)
         # MP, FGA, 3PA, FTA, TRB, AST, STL, BLK, TOV
         teamshare_stats = defaultdict(list)
-        for g in own_last_10_games:
+        for g in self.own_last_10_games:
             gid = g['_id']
             g_players = list(player_game_collection.find({"game_id": gid, "player_team": self.own_team_id}))
             p_row = player_game_collection.find_one({"game_id": gid, "player_id": self.player_id})
@@ -481,45 +564,64 @@ class NBAFeatureExtractor(object):
         backup_stats = self.calculateAdditionalPlayerStats(backup_stats)
         
         if len(starter_stats) < 1:
-            raise Exception("No last games found for %s" % self.pos_starter)
+            print "No last games found for %s" % self.pos_starter
+            self.opp_starter_avgs = {_: np.nan for _ in self.OPP_PLAYER_STATS}
+        else:
+            self.opp_starter_avgs = self.averageStats(starter_stats, self.OPP_PLAYER_STATS)
         if len(backup_stats) < 1:
-            raise Exception("No last games found for %s" % self.pos_backup)
+            print "No last games found for %s" % self.pos_backup
+            self.opp_backup_avgs = {_: np.nan for _ in self.OPP_PLAYER_STATS}
+        else:
+            self.opp_backup_avgs = self.averageStats(backup_stats, self.OPP_PLAYER_STATS)
 
-        self.pos_starter_advanced_stats = self.getAdvancedStatsForPlayer(self.pos_starter, self.opp_team_id, self.OPP_ADVANCED_STATS)
-        self.pos_backup_advanced_stats = self.getAdvancedStatsForPlayer(self.pos_backup, self.opp_team_id, self.OPP_ADVANCED_STATS)
-        self.opp_starter_avgs = self.averageStats(starter_stats, self.OPP_PLAYER_STATS)
-        self.opp_backup_avgs = self.averageStats(backup_stats, self.OPP_PLAYER_STATS)
+        try:
+            self.pos_starter_advanced_stats = self.getAdvancedStatsForPlayer(self.pos_starter, self.opp_all_ids, self.OPP_ADVANCED_STATS)
+        except Exception as e:
+            print "No advanced stats found for %s" % self.pos_starter
+            self.pos_starter_advanced_stats = {_: np.nan for _ in self.OPP_ADVANCED_STATS}
+        try:
+            self.pos_backup_advanced_stats = self.getAdvancedStatsForPlayer(self.pos_backup, self.opp_all_ids, self.OPP_ADVANCED_STATS)
+        except Exception as se:
+            print "No advanced stats found for %s" % self.pos_backup
+            self.pos_backup_advanced_stats = {_: np.nan for _ in self.OPP_ADVANCED_STATS}
+
         self.opp_starter_avgs['height_difference'] = height - starter_row['height']
         self.opp_starter_avgs['weight_difference'] = weight - starter_row['weight']
         self.opp_backup_avgs['height_difference'] = height - backup_row['height']
         self.opp_backup_avgs['weight_difference'] = weight - backup_row['weight']
 
         # calculate position earned/givenup
-        self.calculatePositionStats(opp_last_10_games)
+        self.calculatePositionStats(self.opp_last_10_games)
 
-    def getPlayDistributions(self, pids, team_id):
+    def getPlayDistributions(self, pids, team_ids, stat_keys=None):
+        if stat_keys is None:
+            stat_keys = ['Pos','TotPoss', 'USG%', 'PProd', 'Stops']
+
         # get the position estimates for each player
-        pos_estimates = {pid: self.getPositionEstimateForPlayer(pid, team_id) for pid in pids}
-        
-        last_games = list(team_game_collection.find({"team_id": team_id, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
-                                                    sort=[("game_time",-1)]))
-        last_gids = [_['game_id'] for _ in last_games]
-        if len(last_gids) == 0:
-            raise Exception("Not enough games found for %s at %s" % (team_id,self.ts))
+        pos_estimates = {pid: self.getPositionEstimateForPlayer(pid, team_ids) for pid in pids}
 
-        with_totposs = {}
+        last_games = list(team_game_collection.find({"team_id": {"$in" : team_ids}, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
+                                                    sort=[("game_time",-1)]))
+        last_gids = [_['game_id'] for _ in last_games[:10]]
+        if len(last_gids) == 0:
+            raise Exception("Not enough games found for %s at %s" % (team_ids,self.ts))
+
+        modulated = {_: {} for _ in stat_keys}
         for pid in pids:
-            poss_sum = 0.0
+            sums = {_: 0.0 for _ in stat_keys}
             for gid in last_gids:
                 pid_row = player_game_collection.find_one({"player_id" : pid, "game_id": gid})
-                if pid_row:
-                    poss_sum += pid_row.get('TotPoss', 0.0)
-            with_totposs[pid] = poss_sum / len(last_gids)
+                if pid_row and pid_row['MP'] > 0.0:
+                    for k in stat_keys:
+                        sums[k] += pid_row.get(k, 0.0)
+            for k in stat_keys:
+                if k == 'Pos':
+                    stat_mod = 1.0
+                else:
+                    stat_mod = sums[k] / len(last_gids)
+                modulated[k][pid] = np.array(pos_estimates[pid]) * stat_mod
 
-        for k,v in pos_estimates.items():
-            pos_estimates[k] = np.array(v) * with_totposs[k]
-
-        return pos_estimates
+        return modulated
 
     def rankMatchupPossibility(self):
         '''
@@ -535,9 +637,21 @@ class NBAFeatureExtractor(object):
         # multiply percentages by total plays, and total overlapping plays
         # rank by distance metric to own play distribution
         ranks = {}
+        own_plays = sum(self.play_distr[self.player_id]) / (100.0 * sum(self.pos_distr[self.player_id]))
+        base_vector = np.concatenate([self.pos_distr[self.player_id],[own_plays]])
+        #print "BASE: %s" % base_vector
         for pid in all_players:
-            dist = distance.cityblock(self.play_distr[self.player_id], self.play_distr[pid])
-            print "%s: %s, %s" % (pid, self.play_distr[pid], dist)
+            # don't include non-starters without any plays
+            '''
+            if pid in self.opp_bench and sum(self.play_distr[pid]) == 0.0:
+                print "ignoring %s" % pid
+                continue
+            '''
+            plays = sum(self.play_distr[pid]) / (100.0 * sum(self.pos_distr[pid]))
+            other_vector = np.concatenate([self.pos_distr[pid],[plays]])
+            dist = distance.cityblock(base_vector, other_vector)
+            #print "%s: %s, %s" % (pid, other_vector, dist)
+
             ranks[pid] = dist
 
         # sort
@@ -548,18 +662,24 @@ class NBAFeatureExtractor(object):
             # pull a starter up to first
             for i, pid in enumerate(ranked_pids):
                 if pid in self.opp_starters:
+                    #print "Pulling %s up front" % pid
                     # push i up to 0
                     new_first = ranked_pids.pop(i)
                     ranked_pids.insert(0, new_first)
+                    break
 
-        print ranked_players
+        #print ranked_players
 
         return ranked_pids
 
 
-    def getPositionEstimateForPlayer(self, pid, team_id):
+    def getPositionEstimateForPlayer(self, pid, team_ids):
         # try to get advanced row
-        p_advanced = self.getAdvancedStatsForPlayer(pid, team_id, self.ADVANCED_STATS)
+        try:
+            p_advanced = self.getAdvancedStatsForPlayer(pid, team_ids, self.ADVANCED_STATS)
+        except Exception as e:
+            traceback.print_exc()
+            p_advanced = None
         if p_advanced:
             # derive position percentages
             pos_percents = [float(p_advanced["pct_%s" % k.lower()]) for k in self.POSITIONS]
@@ -595,17 +715,19 @@ class NBAFeatureExtractor(object):
         givenup_position_stats = {p:[] for p in self.POSITIONS}
         for game_row in opp_last_10_games:
             game_id = game_row['_id']
-            opp_opp_id = game_row['home_id'] if game_row['home_id'] != self.opp_team_id else game_row['away_id']
-            earned_players = player_game_collection.find({"game_id" : game_id, "player_team": self.opp_team_id})
-            givenup_players = player_game_collection.find({"game_id" : game_id, "player_team": opp_opp_id})
+            opp_opp_id = game_row['home_id'] if game_row['home_id'] not in self.opp_all_ids else game_row['away_id']
+            opp_opp_all_ids = team_collection.find_one({"all_ids": opp_opp_id})['all_ids']
+            earned_players = player_game_collection.find({"game_id" : game_id, "player_team": {"$in" : self.opp_all_ids}})
+            givenup_players = player_game_collection.find({"game_id" : game_id, "player_team": {"$in" : opp_opp_all_ids}})
             earned_players = self.calculateAdditionalPlayerStats(earned_players)
             givenup_players = self.calculateAdditionalPlayerStats(givenup_players)
             for ep in earned_players:
                 pid = ep['player_id']
                 # try to get advanced row
                 try:
-                    p_advanced = self.getAdvancedStatsForPlayer(pid, self.opp_team_id, self.ADVANCED_STATS)
+                    p_advanced = self.getAdvancedStatsForPlayer(pid, self.opp_all_ids, self.ADVANCED_STATS)
                 except Exception as e:
+                    print e
                     p_advanced = None
                 if p_advanced:
                     # derive position percentages
@@ -636,8 +758,9 @@ class NBAFeatureExtractor(object):
                 pid = gp['player_id']
                 # try to get advanced row
                 try:
-                    p_advanced = self.getAdvancedStatsForPlayer(pid, opp_opp_id, self.ADVANCED_STATS)
+                    p_advanced = self.getAdvancedStatsForPlayer(pid, opp_opp_all_ids, self.ADVANCED_STATS)
                 except Exception as e:
+                    print e
                     p_advanced = None
                 if p_advanced:
                     # derive position percentages
@@ -760,11 +883,11 @@ class NBAFeatureExtractor(object):
         self.opp_espn_team_stats = {k:v for k,v in recent_espnstat[self.opp_team_id].iteritems() if k in self.TEAM_ESPN_STATS}
 
         # own season/running avg team stats ( + reflection)
-        own_results = list(team_game_collection.find({"team_id": self.own_team_id, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
+        own_results = list(team_game_collection.find({"team_id": {"$in" : self.own_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
                                             sort=[("game_time",-1)]))
-        if len(own_results) < 3:
-            raise Exception("Could not find more than 3 prior games for team: %s" % self.own_team_id)
-        own_reflection_results = [team_game_collection.find_one({"game_id": g['game_id'], "team_id": {"$ne": self.own_team_id}}) for g in own_results]
+        if len(own_results) < 2:
+            raise Exception("Could not find more than 3 prior games for team: %s" % self.own_all_ids)
+        own_reflection_results = [team_game_collection.find_one({"game_id": g['game_id'], "team_id": {"$nin": self.own_all_ids}}) for g in own_results]
         
         own_results = self.calculateAdditionalTeamStats(own_results, own_reflection_results)
 
@@ -773,6 +896,7 @@ class NBAFeatureExtractor(object):
 
         self.own_most_recent_game = game_collection.find_one({"_id" : own_results[0]['game_id']})
         self.own_last_10 = copy.deepcopy(own_results[:10])
+        self.own_last_10_games = [game_collection.find_one({"_id": g['game_id']}) for g in self.own_last_10]
         self.own_gametimes = [o['game_time'] for o in own_results[:5]]
         self.own_team_season_avgs = self.averageStats(own_results, self.TEAM_STATS)
         self.own_team_running_avgs = self.averageStats(own_results[:10], self.TEAM_STATS)
@@ -781,12 +905,12 @@ class NBAFeatureExtractor(object):
         #self.own_differentials_avgs = self.averageStats(own_differentials[:10], self.TEAM_STATS)
 
         # opp season/running avg team stats ( + reflection)
-        opp_results = list(team_game_collection.find({"team_id": self.opp_team_id, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
+        opp_results = list(team_game_collection.find({"team_id": {"$in" : self.opp_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
                                             sort=[("game_time",-1)]))
-        if len(opp_results) < 3:
-            raise Exception("Could not find more than 3 prior games for team: %s" % self.opp_team_id)
+        if len(opp_results) < 2:
+            raise Exception("Could not find more than 3 prior games for team: %s" % self.opp_all_ids)
 
-        opp_reflection_results = [team_game_collection.find_one({"game_id": g['game_id'], "team_id": {"$ne": self.opp_team_id}}) for g in opp_results]
+        opp_reflection_results = [team_game_collection.find_one({"game_id": g['game_id'], "team_id": {"$nin": self.opp_all_ids}}) for g in opp_results]
        
         opp_results = self.calculateAdditionalTeamStats(opp_results, opp_reflection_results)
 
@@ -795,6 +919,7 @@ class NBAFeatureExtractor(object):
 
         self.opp_most_recent_game = game_collection.find_one({"_id" : opp_results[0]['game_id']})
         self.opp_last_10 = copy.deepcopy(opp_results[:10])
+        self.opp_last_10_games = [game_collection.find_one({"_id": g['game_id']}) for g in self.opp_last_10]
         self.opp_gametimes = [o['game_time'] for o in opp_results[:5]]
         self.opp_team_season_avgs = self.averageStats(opp_results, self.TEAM_STATS)
         self.opp_team_running_avgs = self.averageStats(opp_results[:10], self.TEAM_STATS)
@@ -862,7 +987,7 @@ class NBAFeatureExtractor(object):
                 - average the 2-man combination effects with the players that are going to be out
                 - take the difference between (2) and (1) - that gives you the additional synergistic effects that are going to be lost
         '''
-        print "INVALIDS: %s" % self.invalids
+        #print "INVALIDS: %s" % self.invalids
 
         try:
             self.player_onoff = self.getOnOffStatsForPlayer(self.player_id, self.own_team_id, self.ONOFF_STATS)
@@ -876,7 +1001,7 @@ class NBAFeatureExtractor(object):
                 invalid_onoff = self.getOnOffStatsForPlayer(pid, self.own_team_id, self.ONOFF_STATS)
                 invalid_onoff_rows.append(invalid_onoff)
             except Exception as e:
-                print e
+                #print e
                 continue
         if len(invalid_onoff_rows) > 0:
             self.invalid_onoffs = self.averageStats(invalid_onoff_rows, self.ONOFF_STATS)
@@ -892,7 +1017,7 @@ class NBAFeatureExtractor(object):
                     invalid_twoman = self.getTwoManStatsForPlayers([self.player_id, pid], self.own_team_id, self.TWOMAN_STATS)
                     invalid_twomans.append(invalid_twoman)
                 except Exception as e:
-                    print e
+                    #print e
                     continue
             if len(invalid_twomans) > 0:
                 twoman_diffs = self.takeDifference(invalid_twomans, [self.player_twoman] * len(invalid_twomans), self.TWOMAN_STATS)
@@ -1025,7 +1150,16 @@ class NBAFeatureExtractor(object):
         data = {'own_espn_team_stats': copy.deepcopy(self.own_espn_team_stats),
                 'opp_espn_team_stats': copy.deepcopy(self.opp_espn_team_stats),
                 'own_team_running_avgs': copy.deepcopy(self.own_team_running_avgs),
-                'opp_team_running_avgs': copy.deepcopy(self.opp_team_running_avgs)}
+                'opp_team_running_avgs': copy.deepcopy(self.opp_team_running_avgs),
+                'own_play_distr': copy.deepcopy(self.own_play_distr_sum),
+                'own_usg_distr': copy.deepcopy(self.own_usg_distr_sum),
+                'own_pprod_distr': copy.deepcopy(self.own_floor_distr_sum),
+                'own_stop_distr': copy.deepcopy(self.own_stop_distr_sum),
+                'opp_play_distr': copy.deepcopy(self.opp_play_distr_sum),
+                'opp_usg_distr': copy.deepcopy(self.opp_usg_distr_sum),
+                'opp_pprod_distr': copy.deepcopy(self.opp_floor_distr_sum),
+                'opp_stop_distr': copy.deepcopy(self.opp_stop_distr_sum),
+                }
 
         # flatten data
         top_keys = data.keys()
@@ -1204,36 +1338,156 @@ class NBAFeatureExtractor(object):
 
 def dumpCSV(filepath, pid=None, limit=None, time=None, min_count=None, save=True):
     if save:
-        # test the filepath, remove old files
-        pass
+        # test the filepath is nonexistent
+        if os.path.isfile(filepath):
+            raise Exception("Manually delete old file")
+        # open the file
+        out_file = open(filepath, 'wb')
+        writer = csv.writer(out_file)
     args = findAllTrainingGames(pid=pid, limit=limit, time=time, min_count=min_count)
-    for arg in args:
-        try:
-            print '\n'
-            print arg
-            fe = NBAFeatureExtractor(arg['player_id'], arg['team_id'], target_game=arg['target_game'])
-            cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = fe.runEncoderFeatures()
-            if save:
-                # massage the output
+    keys = None
+    count = 0
+
+    # multiprocess arguments
+    pool = mp.Pool(5)
+    results = pool.imap_unordered(parseFeaturesForCSV, args)
+
+    # write results
+    if save:
+        for result in results:
+            if result is not None:
+                labels = result['labels']
+                features = result['sorted_features']
+                if count == 0:
+                    writer.writerow(labels)
+                writer.writerow(features)
+                count += 1
+
+def parseFeaturesForCSV(arg):
+    print arg
+    try:
+        
+        fe = NBAFeatureExtractor(arg['player_id'], arg['team_id'], target_game=arg['target_game'])
+        cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = fe.runEncoderFeatures()
+        # aggregate keys and encode cat splits into key name
+        all_dict = dict(zip(cont_labels, cont_features))
+        new_cat_labels = []
+        for i, split in enumerate(cat_feat_splits):
+            split_keys = ["%s#%s" % (i, _) for _ in cat_labels[:split]]
+            if len(split_keys) != split:
+                raise Exception("Cat label splits are incorrect!")
+            cat_labels = cat_labels[split:]
+            new_cat_labels.extend(split_keys)
+        all_dict.update(dict(zip(new_cat_labels, cat_features)))
+        
+        # aggregate labels and sort features
+        id_keys = ['player_id', 'target_game']
+        keys = cont_labels + new_cat_labels
+        labels = ["%s#%s" % ('id',_) for _ in id_keys] + keys
+        sorted_features = [arg[_] for _ in id_keys]+[all_dict[_] for _ in keys]
+
+        # return
+        return {'labels' : labels,
+                'sorted_features': sorted_features}
+    except Exception as e:
+        traceback.print_exc()
+        return None
+
+def parseFeaturesForUse(arg):
+    try:
+        fe = NBAFeatureExtractor(arg['player_id'], arg['team_id'], target_game=arg['target_game'])
+        cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = fe.runEncoderFeatures()
+        return (arg, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
+    except Exception as e:
+        traceback.print_exc()
+        return None
+
+
+def streamPlayerInput(pid, limit=None, time=None, min_count=None):
+    args = findAllTrainingGames(pid=pid, limit=limit, time=time, min_count=min_count)
+    keys = None
+    count = 0
+
+    # multiprocess arguments
+    pool = mp.Pool(5)
+    results = pool.imap_unordered(parseFeaturesForUse, args)
+
+    for result in results:
+        if result is not None:
+            yield result
+            count += 1
+
+def streamCSV(filepath):
+    # test the filepath is existent
+    if not os.path.isfile(filepath):
+        raise Exception("File does not exist")
+    # open the file
+    in_file = open(filepath, 'rb')
+    reader = csv.reader(in_file)
+    id_regex = re.compile("id#")
+    cat_regex = re.compile("[0-9]+#")
+    count = 0
+    # cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits
+    labels = None
+    cat_feat_splits = []
+    for row in reader:
+        if count == 0:
+            labels = row
+            count += 1
+            # find cat_feat_splits
+            cat_split_counter = 0
+            while True:
+                prefix = "%s#" % cat_split_counter
+                cat_split_counter += 1
+                matching_keys = len([_ for _ in labels if _.startswith(prefix)])
+                if matching_keys == 0:
+                    break
+                cat_feat_splits.append(matching_keys)
+            continue
+        cat_labels = []
+        cat_features = []
+        cont_labels = []
+        cont_features = []
+        id_labels = []
+        id_features = []
+        values = zip(labels, row)
+        for k,v in values:
+            # try to convert v
+            try:
+                v = float(v)
+            except Exception as e:
                 pass
-                # dump to csv
-                pass
-        except Exception as e:
-            traceback.print_exc()
+            if re.search(id_regex, k):
+                k = k[k.index('#')+1:]
+                id_labels.append(k)
+                id_features.append(v)
+            elif re.search(cat_regex, k):
+                k = k[k.index('#')+1:]
+                cat_labels.append(k)
+                cat_features.append(v)
+            else:
+                cont_labels.append(k)
+                cont_features.append(v)
+        id_dict = dict(zip(id_labels, id_features))
+        yield (id_dict, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits)
+        count += 1
+
+
+
 
 
 if __name__=="__main__":
-    '''
-    #arg = {'player_id': 'willide01', 'team_id': 'BRK', 'target_game': '201504150BRK'}
+    
+    #arg = {'player_id': 'parketo01', 'team_id': 'SAS', 'target_game': '200910280SAS'}
+    arg = {'player_id': 'westda01', 'team_id': 'NOH', 'target_game': '201001290NOH'}
+    #arg = {'player_id': 'curryst01', 'team_id': 'GSW', 'target_game': '201503180GSW'}
     #arg = {'player_id': 'warretj01', 'team_id': 'PHO', 'target_game': '201502250DEN'}
-    arg = {'player_id': 'tollian01', 'team_id': 'DET', 'target_game': '201503310DET'}
+    #arg = {'player_id': 'tollian01', 'team_id': 'DET', 'target_game': '201503310DET'}
     invalids = []
     
     fe = NBAFeatureExtractor(arg['player_id'], arg['team_id'], target_game=arg['target_game'], invalids=invalids)
     cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = fe.runEncoderFeatures()
     
-    print cat_feat_splits
-
     for l,v in zip(cat_labels, cat_features):
         print "%s: %s" % (l,v)
 
@@ -1242,8 +1496,8 @@ if __name__=="__main__":
         print "%s: %s" % (l,v)
     
     sys.exit(1)
-    '''
-    dumpCSV("", pid=None, limit=None, time=None, min_count=None, save=True)
+    
+    dumpCSV("/usr/local/fsai/analysis/data/nba_stats_1.csv", pid=None, limit=None, time=None, min_count=None, save=True)
 
 
 

@@ -740,9 +740,11 @@ class playerCrawler(Crawler):
                 elif title == 'position':
                     text = title_tag.next_sibling.strip().lower()
                     text = text.replace(u"\xa0\u25aa", u' ').strip()
+                    text = text.replace("c/forward", 'c and pf')
                     text = text.replace("guard/forward", 'sg and sf')
                     text = text.replace('small forward','sf')
                     text = text.replace('power forward','pf')
+                    text = text.replace('forward', 'sf and pf')
                     text = text.replace('shooting guard','sg')
                     text = text.replace('point guard','pg')
                     text = text.replace('center','c')
@@ -1072,7 +1074,27 @@ class playerCrawler(Crawler):
         return False
 
 
+def checkPlayersCrawled():
+    '''
+    Look through the games, and check that every player in the games have been crawled as well
+    '''
+    c = playerCrawler()
+    c.createLogger()
+
+    pgames = player_game_collection.find({})
+    for pg in pgames:
+        pid = pg['player_id']
+        playerrow = player_collection.find_one({"_id" : pid})
+        if not playerrow:
+            url = "http://www.basketball-reference.com/players/%s/%s.html" % (pid[0],pid)
+            print "Crawling %s" % url
+            soup = c.checkVisit(url)
+            if soup:
+                c.crawlPlayerPage(url, soup)
+
+
 if __name__=="__main__":
+    '''
     p_crawl = playerCrawler(refresh=True)
     t_crawl = teamCrawler(refresh=True)
     g_crawl = gameCrawler(refresh=True, days_back=7)
@@ -1081,5 +1103,8 @@ if __name__=="__main__":
     g_crawl.run()
     t_crawl.run()
 
+    '''
+    #TO CRAWL A Player
+    checkPlayersCrawled()
 
 

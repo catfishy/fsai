@@ -9,6 +9,8 @@ import random
 import math
 import copy
 import traceback
+import cPickle
+from datetime import datetime
 
 import simplejson as json
 import cPickle as pickle
@@ -22,146 +24,118 @@ import matplotlib.pyplot as plt
 import GPy
 import numpy as np
 import scipy
+from sklearn import cross_validation
 
 from analysis.bball.playerAnalysis import *
 from statsETL.db.mongolib import *
+from analysis.util.autoencoder import train_dA, shared_dataset
+from analysis.util.stacked_autoencoder import train_SdA
 
 
-TREND_FEATURE_FNS = []
-CORE_FEATURE_FNS = [('plf','runPlayerFeatures'),
-                    ('oef','runOppositionEarnedFeatures'),
-                    ('if','runIntensityFeatures'), 
-                    ('phf','runPhysicalFeatures'),
-                    ('oaf','runOppositionAllowedFeatures'), 
-                    ('opf','runOppositionPlayerFeatures')]
-UNUSED_FNS = []
+def loadModel(filepath):
+    return cPickle.load(open(filepath, 'rb'))
+
+def pickleModel(filepath, model):
+    return cPickle.dump(model, open(filepath,'wb'))
+
+def encodeCSVInput(csv_path, model_path, y_key='PTS', limit=5000):
+    dproc = StreamDataPreprocessor(streamCSV(csv_file), limit=limit, clamp=(0,1))
+    Y = dproc.getY(y_key)
+    X = dproc.getAllSamples()
+    labels = dproc.getFeatureLabels()
+
+    # using AE to encode
+    da = loadModel(model_path)
+    encoded_X = [da.get_hidden_values(_).eval() for _ in X] 
+    return (encoded_X, Y)
+
+def encodePlayerInput(pid, model_path, pipeline_path, y_key='PTS', limit=None, time=None, min_count=None):
+    stream = streamPlayerInput(pid, limit=limit, time=time, min_count=min_count)
+    dproc = StreamDataPreprocessor(stream, pipeline_path=pipeline_path)
+    Y = dproc.getY(y_key)
+    X = dproc.getAllSamples()
+    labels = dproc.getFeatureLabels()
+
+    # using AE to encode
+    da = loadModel(model_path)
+    encoded_X = [da.get_hidden_values(_).eval() for _ in X]
+
+    # normalize encoded values
+    scaler = StandardScaler()
+    encoded_X = scaler.fit_transform(encoded_X)
+
+    return (encoded_X, Y)
+
+def getNBATrainingData(file_path, pipeline_path=None, y_key=None, by_class=False, test_size=0.4, limit=10000, n_outs=None):
+    if y_key is None:
+        y_key = 'PTS'
+    dproc = StreamDataPreprocessor(streamCSV(file_path), limit=limit, clamp=2.5, feature_range=(0,1))
+
+    if pipeline_path is not None:
+        dproc.dumpPipeline(pipeline_path)
+
+    if by_class:
+        Y = dproc.getClassY(y_key, n_outs, clamp=2.5)
+    else:
+        Y = dproc.getY(y_key)
+
+    X = dproc.getAllSamples()
+    labels = dproc.getFeatureLabels()
+    
+    # split into train/test
+    X_train, X_test, Y_train, Y_test = cross_validation.train_test_split(X, Y, test_size=test_size)
+    train_set = (X_train, Y_train)
+    # split test set into validation/test
+    X_valid, X_test, Y_valid, Y_test = cross_validation.train_test_split(X_test, Y_test, test_size=0.5)
+    valid_set = (X_valid, Y_valid)
+    test_set = (X_test, Y_test)
+
+    # put into shared vars
+    test_set_x, test_set_y = shared_dataset(test_set)
+    valid_set_x, valid_set_y = shared_dataset(valid_set)
+    train_set_x, train_set_y = shared_dataset(train_set)
+    rval = [labels, (train_set_x, train_set_y), (valid_set_x, valid_set_y), (test_set_x, test_set_y)]
+
+    return rval
+
+def trainAE(csv_path, model_path, pipeline_path, y_key='PTS', limit=5000, corruption=0.35, learning_rate=0.1, epochs=2000, batch_size=10):
+    # training a AE
+    labels, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, limit=limit)
+    da = train_dA(labels, train_set, corruption=corruption, learning_rate=learning_rate, training_epochs=epochs, batch_size=batch_size, output_folder='dA_plots')
+    pickleModel(model_path, da)
+
+def trainSAE(csv_path, model_path, pipeline_path, y_key='FG%', limit=5000, 
+             training_epochs=20, training_lr=0.001, finetune_epochs=1000, finetune_lr=0.1,
+             batch_size=1, hidden_layer_sizes=None, corruption_levels=None, n_outs=None):
+    if n_outs is None:
+        n_outs = 20
+    labels, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, by_class=True, limit=limit, n_outs=n_outs)
+    sda = train_SdA(len(labels), train_set, valid_set, test_set, finetune_lr=finetune_lr, pretraining_epochs=training_epochs,
+             pretrain_lr=training_lr, training_epochs=finetune_epochs, hidden_layer_sizes=hidden_layer_sizes, corruption_levels=corruption_levels,
+             batch_size=batch_size, n_outs=n_outs)
+    pickleModel(model_path, sda)
 
 class DataPreprocessor(object):
 
-    """
-    take samples, with samples split into cont vars and cat vars
-    expects cat vars to be one hot encoded to -1 or 1
-    normalizes cont vars by minmax to (-1,1), then scaling to 0 mean and 1 stdvar
-    concatenates cont and cat vars to product single sample list
-    """
+    def __init__(self, *args, **kwargs):
+        raise Exception("Not Implemented")
 
-    def __init__(self, timestamps, cont_labels, cont_samples, cat_labels, cat_samples, Y, 
-                 cat_kernel_splits=None, weigh_recent=False, weigh_outliers=False, 
-                 clamp=None):
-        self.cont_labels = cont_labels
-        self.cat_labels = cat_labels
-        self.cont_samples = np.array(cont_samples)
-        self.cat_samples = np.array(cat_samples)
-        if self.cont_labels is None:
-            self.cont_labels = []
-        if self.cat_labels is None:
-            self.cat_labels = []
-
-        self.Y = np.array(Y)
-        self.timestamps = np.array(timestamps)
-        self.cat_kernel_splits = cat_kernel_splits
-        if self.cat_kernel_splits is None:
-            self.cat_kernel_splits = []
-
-        if not (len(self.cont_samples) == len(self.cat_samples) == len(self.Y)):
-            raise Exception("Inconsistent samples")
-
-        if len(self.cont_samples) < 2 and len(self.cat_samples) < 2:
-            raise Exception("Need more than one data point")
-
-        self.clamp = clamp if clamp else (-1,1)
-        self.clamped = True if clamp else False
-
-        self.labels = None
-        self.samples = None
-        self.scaler = StandardScaler()
-        self.minmax = MinMaxScaler(feature_range=self.clamp)
-        self.cat_minmax = MinMaxScaler(feature_range=self.clamp)
-        self.imputer = Imputer()
-
-        # sort and normalize
-        self.trendY = None
-        self.runningAverage = None
-        self.sortSamples()
+    def normalizeSamples(self): 
+        # find bad continuous columns
         self.findBadContCols()
-        self.normalizeSamples()
 
-        # calculate different target values
-        self.trendY = self.calcTrendY(window_size=15)
-        self.runningAverage = self.calcRunningAverage(window_size=15)
-
-        # upsample
-        self.upsample(recent=weigh_recent, outliers=weigh_outliers)
-
-    def upsample(self, recent, outliers):
-        to_add_cont = []
-        to_add_cat = []
-        to_add_Y = []
-        to_add_timestamps = []
-        to_add_trendY = []
-        to_add_runningAvg = []
-
-        if recent:
-            top = 7
-            top_2 = 4
-            # calculate upsamples
-            to_add_cont.append(self.cont_samples[-top:])
-            #to_add_cont.append(self.cont_samples[-top_2:])
-            to_add_cat.append(self.cat_samples[-top:])
-            #to_add_cat.append(self.cat_samples[-top_2:])
-            to_add_Y.append(self.Y[-top:])
-            #to_add_Y.append(self.Y[-top_2:])
-            to_add_timestamps.append(self.timestamps[-top:])
-            #to_add_timestamps.append(self.timestamps[-top_2:])
-            to_add_trendY.append(self.trendY[-top:])
-            #to_add_trendY.append(self.trendY[-top_2:])
-            to_add_runningAvg.append(self.runningAverage[-top:])
-            #to_add_runningAvg.append(self.runningAverage[-top_2:])
-
-        if outliers:
-            by_value = defaultdict(list)
-            for k,v in enumerate(self.Y):
-                by_value[abs(v)].append(k)
-            highest_values = sorted(by_value.items(), key=lambda x: x[0], reverse=True)
-            top = max(1,int(len(highest_values) * 0.2))
-            highest_values = highest_values[:top]
-            indices = np.array([c for k,v in highest_values for c in v])
-            to_add_cont.append(self.cont_samples[indices])
-            to_add_cat.append(self.cat_samples[indices])
-            to_add_Y.append(self.Y[indices])
-            to_add_timestamps.append(self.timestamps[indices])
-            to_add_trendY.append(self.trendY[indices])
-            to_add_runningAvg.append(self.runningAverage[indices])
-
-        # concat samples
-        if to_add_cont:
-            self.cont_samples = np.concatenate((self.cont_samples,[b for a in to_add_cont for b in a]))
-            self.cat_samples = np.concatenate((self.cat_samples, [b for a in to_add_cat for b in a]))
-            self.Y = np.concatenate((self.Y, [b for a in to_add_Y for b in a]))
-            self.timestamps = np.concatenate((self.timestamps,[b for a in to_add_timestamps for b in a]))
-            self.trendY = np.concatenate((self.trendY, [b for a in to_add_trendY for b in a]))
-            self.runningAverage = np.concatenate((self.runningAverage, [b for a in to_add_runningAvg for b in a]))
-            # re-sort
-            self.sortSamples()
-
-    def sortSamples(self):
-        indices = [i for i,ts in sorted(enumerate(self.timestamps), key=lambda x: x[1])]
-        self.cont_samples = np.array([self.cont_samples[indices[i]] for i in range(len(self.timestamps))])
-        self.cat_samples = np.array([self.cat_samples[indices[i]] for i in range(len(self.timestamps))])
-        self.Y = np.array([self.Y[indices[i]] for i in range(len(self.timestamps))])
-        self.timestamps = np.array(list(sorted(self.timestamps)))
-        if self.trendY is not None:
-            self.trendY = np.array([self.trendY[indices[i]] for i in range(len(self.timestamps))])
-        if self.runningAverage is not None:
-            self.runningAverage = np.array([self.runningAverage[indices[i]] for i in range(len(self.timestamps))])
-
-    def normalizeSamples(self):  
+        # normalize cont samples
         samples = np.array(self.cont_samples)
         samples = self.imputer.fit_transform(samples)
-        samples = self.minmax.fit_transform(samples)
-        if not self.clamped:
-            samples = self.scaler.fit_transform(samples)
+        samples = self.scaler.fit_transform(samples)
+        if self.clamp is not None:
+            # after standard scaling, convert all values abs(v) > clamp to (+/-)clamp value
+            samples[samples > self.clamp] = self.clamp
+            samples[samples < -self.clamp] = -self.clamp
+        if self.minmax is not None:
+            samples = self.minmax.fit_transform(samples)
         self.cont_samples = samples
+
         # remove bad columns from labels
         for bad_col in sorted(self.bad_cont_cols,reverse=True):
             self.cont_labels = scipy.delete(self.cont_labels, bad_col, 0)
@@ -174,7 +148,7 @@ class DataPreprocessor(object):
     def findBadContCols(self):
         # find features that would be removed after imputing
         to_delete = []
-        samples = np.array(self.cont_samples)
+        samples = self.cont_samples
         for col_i in range(len(self.cont_labels)):
             col_vals = samples[:,col_i]
             bad_col = all([np.isnan(i) for i in col_vals])
@@ -230,55 +204,10 @@ class DataPreprocessor(object):
         DON'T CHANGE THIS ORDER
         """
         all_samples = []
-        for cat_sample, cont_sample in zip(self.cat_samples, self.cont_samples):
+        for cat_sample, cont_sample in zip(self.cat_samples, self.cont_samples):    
             whole_sample = np.concatenate((cont_sample, cat_sample), axis=0)
             all_samples.append(whole_sample)
         return np.array(all_samples)
-
-    def getY(self):
-        return copy.deepcopy(self.Y)
-
-    def getTrendY(self):
-        return copy.deepcopy(self.trendY)
-
-    def getRunningAverage(self):
-        return copy.deepcopy(self.runningAverage)
-
-    def calcTrendY(self, window_size=15):
-        '''
-        returns Y as a percentage above or below the windowed avg
-        determines window by first looking backward, if not a
-        large enough window, then increase window going into the future
-        until all values are consumed or window size is reached
-        '''
-        in_vals = copy.deepcopy(self.Y)
-        ratios = []
-        for i,y in enumerate(in_vals):
-            prev_values = in_vals[max(0,i-window_size):max(0,i)]
-            if len(prev_values) < window_size:
-                # try to push it forward
-                length_needed = window_size - len(prev_values)
-                future_values = in_vals[i:i+length_needed]
-                prev_values = np.concatenate((prev_values,future_values))
-            prev_avg = np.mean(prev_values)
-            if prev_avg == 0.0 and y > 0.0:
-                ratios.append(2.0) # DEFAULT TO 2.0 IF INF
-            elif prev_avg == 0.0 and y == 0.0:
-                ratios.append(1.0)
-            else:
-                ratios.append(y/prev_avg)
-        return np.array(ratios)
-
-    def calcRunningAverage(self, window_size=15):
-        '''
-        DEPRECATED
-        '''
-        in_vals = copy.deepcopy(self.Y)
-        trend_y = []
-        for i,v in enumerate(in_vals):
-            trend_y.append(np.mean(in_vals[max(0,i+1-window_size):i+1]))
-        trend_y = [trend_y[0]] + trend_y[:-1]
-        return np.array(trend_y)
 
     def getFeatureLabels(self):
         return list(self.cont_labels) + list(self.cat_labels)
@@ -287,9 +216,13 @@ class DataPreprocessor(object):
         if cont_sample:
             samples = np.array(cont_sample)
             samples = self.imputer.transform(samples)
-            samples = self.minmax.transform(samples)
-            if not self.clamped:
-                samples = self.scaler.transform(samples)
+            samples = self.scaler.transform(samples)
+            if self.clamp is not None:
+                # after standard scaling, convert all values abs(v) > clamp to (+/-)clamp value
+                samples[samples > self.clamp] = self.clamp
+                samples[samples < -self.clamp] = -self.clamp
+            if self.minmax is not None:
+                samples = self.minmax.transform(samples)
             cont_sample = samples[0]
         if cat_sample:
             samples = np.array(cat_sample)
@@ -297,6 +230,158 @@ class DataPreprocessor(object):
             cat_sample = samples[0]
         whole_sample = np.concatenate((cont_sample, cat_sample), axis=0)
         return whole_sample
+
+    def dumpPipeline(self, filepath):
+        data = {'clamp': self.clamp,
+                'imputer': self.imputer,
+                'scaler': self.scaler,
+                'minmax': self.minmax,
+                'cat_minmax': self.cat_minmax}
+        result = cPickle.dump(data, open(filepath,'wb'))
+        return result
+
+    def loadPipeline(self, filepath):
+        data = cPickle.load(open(filepath,'rb'))
+        self.clamp = data['clamp']
+        self.imputer = data['imputer']
+        self.scaler = data['scaler']
+        self.minmax = data['minmax']
+        self.cat_minmax = data['cat_minmax']
+
+class StreamDataPreprocessor(DataPreprocessor):
+
+    TARGET_KEYS = ['PTS', 'TRB', 'AST', 'eFG%']
+
+    def __init__(self, input_stream, limit=None, feature_range=None, clamp=None, pipeline_path=None):
+        # import data from stream
+        self.cont_labels = None
+        self.cat_labels = None
+        self.cat_kernel_splits = None
+        self.cat_samples = []
+        self.cont_samples = []
+        self.ids = []
+        count = 0
+        sys.stdout.write(str(count))
+        for row in input_stream:
+            id_dict, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = row
+            if self.cont_labels is None:
+                self.cont_labels = np.array(cont_labels)
+            if self.cat_labels is None:
+                self.cat_labels = np.array(cat_labels)
+            if self.cat_kernel_splits is None:
+                self.cat_kernel_splits = np.array(cat_feat_splits)
+            self.cat_samples.append(cat_features)
+            self.cont_samples.append(cont_features)
+            self.ids.append(id_dict)
+            count += 1
+            sys.stdout.write('\r' + str(count) + ' ' * 20)
+            sys.stdout.flush()
+            if limit and count >= limit:
+                sys.stdout.write('\n')
+                break
+        self.cont_samples = np.array(self.cont_samples)
+        self.cat_samples = np.array(self.cat_samples)
+
+        # basic checks
+        if not (len(self.cont_samples) == len(self.cat_samples)):
+            raise Exception("Inconsistent cat/cont sample counts")
+        elif len(self.cont_samples) < 2 and len(self.cat_samples) < 2:
+            raise Exception("Need more than one data point")
+
+        # create normalization pipeline, and fit to data if necessary
+        if pipeline_path is None:
+            self.clamp = clamp
+            self.feature_range = feature_range
+            self.imputer = Imputer()
+            self.scaler = StandardScaler()
+            if self.feature_range is not None:
+                self.minmax = MinMaxScaler(feature_range=self.feature_range)
+                self.cat_minmax = MinMaxScaler(feature_range=self.feature_range)
+            else:
+                self.minmax = None
+                self.cat_minmax = MinMaxScaler(feature_range=(-1,1))
+            self.normalizeSamples()
+        else:
+            self.loadPipeline(pipeline_path)
+
+        # get Y and trendY
+        self.Y = None
+        self.trendY = None
+        self.Y = self.calculateY()
+        self.trendY = self.calculateTrendY()
+
+    def calculateY(self):
+        ys = []
+        to_remove = []
+        for i, id_dict in enumerate(self.ids):
+            pid = id_dict['player_id']
+            gid = id_dict['target_game']
+            row = player_game_collection.find_one({"player_id" : pid, "game_id" : gid})
+            player_targets = {}
+            bad_sample = False
+            if not row:
+                bad_sample = True
+            else:
+                for target_key in self.TARGET_KEYS:
+                    y_val = row.get(target_key)
+                    if y_val is None or y_val == '':
+                        bad_sample = True
+                        break
+                    player_targets[target_key] = y_val
+            if bad_sample:
+                # remove the sample
+                to_remove.append(i)
+            else:
+                ys.append(player_targets)
+
+        # remove the bad samples
+        self.cat_samples = np.delete(self.cat_samples, to_remove, axis=0)
+        self.cont_samples = np.delete(self.cont_samples, to_remove, axis=0)
+        self.ids = np.delete(self.ids, to_remove, axis=0)
+
+        #print self.cat_samples
+        #print self.cont_samples
+        #print self.ids
+
+        return ys
+
+    def calculateTrendY(self):
+        pass
+
+    def getY(self, key):
+        if key not in self.TARGET_KEYS or self.Y is None:
+            raise Exception("Y not computed")
+        to_return = [_[key] for _ in self.Y]
+        return to_return
+
+    def getClassY(self, key, n_outs, clamp=2):
+        if key not in self.TARGET_KEYS or self.Y is None:
+            raise Exception("Y not computed")
+        clamp = abs(clamp)
+        raw_values = [_[key] for _ in self.Y]
+        # put into class buckets
+        scaler = StandardScaler()
+        # normalize
+        norm_raw = scaler.fit_transform(raw_values)
+        # put into buckets
+        buckets = np.linspace(-clamp,clamp,n_outs-1)
+        placements = np.digitize(norm_raw, buckets)
+        '''
+        # convert to one-hot encoding, activating the specified bucket
+        to_return = []
+        for p in placements:
+            vector = np.zeros(n_outs)
+            vector[p] = 1.0
+            to_return.append(vector)
+        return to_return
+        '''
+        return placements
+
+    def getTrendY(self, key):
+        if key not in self.TARGET_KEYS or self.trendY is None:
+            raise Exception("Y not computed")
+        to_return = [_[key] for _ in self.trendY]
+        return to_return
 
 
 class CrossValidationFramework(object):
@@ -343,11 +428,11 @@ class CrossValidationFramework(object):
             scores.append(score)
         return scores
 
+
 class RandomForestValidationFramework(CrossValidationFramework):
 
-    def __init__(self, X, Y, test_size=0.25, feature_labels=None):
+    def __init__(self, X, Y, test_size=0.25, feature_labels=None, restarts=10):
         super(RandomForestValidationFramework, self).__init__(X, Y, test_size)
-
         self.trained = False
         self.feature_labels = feature_labels
 
@@ -357,7 +442,7 @@ class RandomForestValidationFramework(CrossValidationFramework):
     def load_model(self, model_file):
         pass
 
-    def train(self, zip_data=None, weigh_recent=True):
+    def train(self, zip_data=None):
         self.trained = False
 
         if zip_data:
@@ -373,34 +458,50 @@ class RandomForestValidationFramework(CrossValidationFramework):
             self.data_test = None
             self.create_split()
 
-        model = RandomForestRegressor(n_estimators=400, n_jobs=-1)
-        # TODO: weigh more recent samples higher
-        model.fit(self.X_train, self.Y_train, sample_weight=None)
-        train_error = mean_squared_error(self.Y_train, model.predict(self.X_train))
-        test_error = mean_squared_error(self.Y_test, model.predict(self.X_test))
-        featimp = sorted(zip(self.feature_labels, model.feature_importances_), reverse=True, key=lambda x: x[1])
-        for l, imp in featimp:
-            print "%s : %s" % (l,imp)
-        
-        # for gradient boosting
         '''
-        model = GradientBoostingRegressor(n_estimators=200)
+        # for random forest
+        model = make_pipeline(PolynomialFeatures(1), RandomForestRegressor(n_estimators=400, n_jobs=-1))
         model.fit(self.X_train, self.Y_train)
-        train_error = mean_squared_error(self.Y_train, model.predict(self.X_train))
-        test_error = mean_squared_error(self.Y_test, model.predict(self.X_test))
+        '''
+        # for gradient boosting
+        model = make_pipeline(PolynomialFeatures(1), GradientBoostingRegressor(n_estimators=400))
+        model.fit(self.X_train, self.Y_train)
+        
+        '''
         featimp = sorted(zip(self.feature_labels, model.feature_importances_), reverse=True, key=lambda x: x[1])
         for l, imp in featimp:
             print "%s : %s" % (l,imp)
         '''
-
         self.model = model
         self.trained = True
 
     def test(self, graph=False):
-        actual = self.Y_test
-        predicted = self.model.predict(self.X_test)
-        test_error = mean_squared_error(actual, predicted)
-        return test_error
+        train_predicted = self.model.predict(self.X_train)
+        test_predicted = self.model.predict(self.X_test)
+        train_error = mean_squared_error(self.Y_train, train_predicted)
+        test_error = mean_squared_error(self.Y_test, test_predicted)
+
+        train_zipped = sorted(zip(self.Y_train, train_predicted), key=lambda x: x[0])
+        test_zipped = sorted(zip(self.Y_test, test_predicted), key=lambda x: x[0])
+
+        train_real = [a for a,b in train_zipped]
+        train_predicted = [b for a,b in train_zipped]
+        test_real = [a for a,b in test_zipped]
+        test_predicted = [b for a,b in test_zipped]
+
+        if graph:
+            fig2 = plt.figure()
+            p2 = plt.plot(train_predicted)
+            p3 = plt.plot(train_real)
+            fig2.suptitle('TRAIN', fontsize=20)
+
+            fig3 = plt.figure()
+            p4 = plt.plot(test_predicted)
+            p5 = plt.plot(test_real)
+            fig3.suptitle('TEST', fontsize=20)
+
+            plt.show(block=True)
+        return (train_error, test_error)
 
 
 class LinearRegressionValidationFramework(CrossValidationFramework):
@@ -453,20 +554,41 @@ class LinearRegressionValidationFramework(CrossValidationFramework):
 
             model_three = make_pipeline(PolynomialFeatures(degree), SGDRegressor(penalty='elasticnet', n_iter=50, shuffle=True))
             model_three.fit(self.X_train, self.Y_train)
-            train_error = mean_squared_error(self.Y_train, model_three.predict(self.X_train))
-            test_error = mean_squared_error(self.Y_test, model_three.predict(self.X_test))
-            print train_error
-            print test_error
-            #p3 = plt.plot(model_three.steps[1][1].coef_, label="elasticnet")
-            #plt.setp(p3, color='b', linewidth=2.0)
 
-        #plt.show(block=True)
         self.model = model_three
         self.trained = True
 
     def test(self, graph=False):
-        train_error = mean_squared_error(self.Y_train, self.model.predict(self.X_train))
-        test_error = mean_squared_error(self.Y_test, self.model.predict(self.X_test))
+        train_predicted = self.model.predict(self.X_train)
+        test_predicted = self.model.predict(self.X_test)
+        train_error = mean_squared_error(self.Y_train, train_predicted)
+        test_error = mean_squared_error(self.Y_test, test_predicted)
+
+        train_zipped = sorted(zip(self.Y_train, train_predicted), key=lambda x: x[0])
+        test_zipped = sorted(zip(self.Y_test, test_predicted), key=lambda x: x[0])
+
+        train_real = [a for a,b in train_zipped]
+        train_predicted = [b for a,b in train_zipped]
+        test_real = [a for a,b in test_zipped]
+        test_predicted = [b for a,b in test_zipped]
+
+        if graph:
+            fig1 = plt.figure()
+            p1 = plt.plot(self.model.steps[1][1].coef_, label="coeffs")
+            plt.setp(p1, color='b', linewidth=2.0)
+            fig1.suptitle('COEFFS', fontsize=20)
+
+            fig2 = plt.figure()
+            p2 = plt.plot(train_predicted)
+            p3 = plt.plot(train_real)
+            fig2.suptitle('TRAIN', fontsize=20)
+
+            fig3 = plt.figure()
+            p4 = plt.plot(test_predicted)
+            p5 = plt.plot(test_real)
+            fig3.suptitle('TEST', fontsize=20)
+
+            plt.show(block=True)
         return (train_error, test_error)
 
     def score(self, test_results):
@@ -585,177 +707,50 @@ def getUpcomingGameFeatures(pid, matched_game):
         features[name] = new_features
     return features
 
-def getProcessor(pid, games, fn_name, y_key, weigh_recent=False, weigh_outliers=False):
-    cat_X = []
-    cont_X = []
-    Y = []
-    ts_X = []
-    cat_labels = None
-    cont_labels = None
-    cat_splits = None
-
-    for g in games:
-        gid = str(g['game_id'])
-        fext = featureExtractor(pid, target_game=gid) 
-        try:
-            cat_labels, cat_features, cont_labels, cont_features, cat_splits = getattr(fext, fn_name)()
-        except Exception as e:
-            print "Exception running %s for pid %s, game %s: %s" % (fn_name, pid, gid, e)
-            print traceback.print_exc()
-            continue
-
-        ts = fext.timestamp()
-        y = fext.getY(y_key)
-        ts_X.append(ts)
-        cat_X.append(cat_features)
-        cont_X.append(cont_features)
-        Y.append(y)
-
-    # normalize the data
-    proc = DataPreprocessor(ts_X, cont_labels, cont_X, cat_labels, cat_X, Y, 
-                            cat_kernel_splits=cat_splits, weigh_recent=weigh_recent, 
-                            weigh_outliers=weigh_outliers)
-    return proc
-
-def trainTrendModels(pid, training_games, y_key, weigh_recent=False, weigh_outliers=True, test=False, plot=False):
-    processors = {}
-    models = {}
-
-    if test:
-        test_size = 0.3
-    else:
-        test_size = 0.0
-
-    for name, f in TREND_FEATURE_FNS:
-        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent, weigh_outliers=weigh_outliers)
-    for name,proc in processors.iteritems():
-        X = proc.getAllSamples()
-        trendY = proc.getTrendY()
-        realY = proc.getY()
-        print "name: %s, ykey: %s, model: %s, x_len: %s, y_len: %s" % (pid, y_key, name, len(X), len(realY))
-        labels = proc.getFeatureLabels()
-        ra = proc.getRunningAverage()
-        kernel = proc.getKernel()
-        zipped_ra = zip(ra,realY)
-
-        # for random forest
-        '''
-        framework = RandomForestValidationFramework(X,trendY, test_size=0.20, feature_labels=labels)
-        framework.train(zip_data=zipped_ra)
-        predicted_trend = framework.model.predict(framework.X_test)
-        '''
-
-        # for gp
-        kernel = proc.getKernel()
-        framework = GPCrossValidationFramework(kernel, X, trendY, test_size=test_size, restarts=10)
-        framework.train(zip_data=zipped_ra)
-        print framework.model
-        # save the model
-        models[name] = framework
-
-        if test:
-            predicted_trend = []
-            predicted_vars = []
-            for x_test in framework.X_test:
-                means, variances = framework.model.predict(np.array([x_test]))
-                predicted_trend.append(means[0][0])
-                predicted_vars.append(math.sqrt(variances[0][0]))
-
-            actual_trend = [_[0] for _ in framework.Y_test]
-            ra = framework.data_test
-            avgs = [_[0] for _ in ra]
-            actual = [_[1] for _ in ra]
-            #predicted = [avgs[i]*_ for i,_ in enumerate(predicted_trend)]
-            corrs = np.corrcoef(actual_trend, predicted_trend)
-
-            print "%s for %s" % (pid, y_key)
-            print actual_trend
-            print predicted_trend
-            print predicted_vars
-            print "%s: %s" % (name, corrs)
-
-
-            if plot:
-                indices = [i for i,a in sorted(enumerate(predicted_trend), key=lambda x:x[1])]
-                sorted_actual = [actual[indices[i]] for i in range(len(indices))]
-                sorted_actual_trends = [actual_trend[indices[i]] for i in range(len(indices))]
-                #sorted_predicted = [predicted[indices[i]] for i in range(len(indices))]
-                sorted_predicted_trends = [predicted_trend[indices[i]] for i in range(len(indices))]
-                sorted_avgs = [avgs[indices[i]] for i in range(len(indices))]
-                sorted_vars = [predicted_vars[indices[i]] for i in range(len(indices))]
-
-                fig = plt.figure()
-                p1 = plt.plot(sorted_actual_trends, marker='o', label='actual')
-                p2 = plt.plot(sorted_predicted_trends, marker='o', label='predicted')
-                p3 = plt.plot(sorted_vars, marker='o', label='vars')
-                fig.suptitle(name, fontsize=20)
-                plt.legend(loc='best', shadow=True)
-    if test and plot:
-        plt.show(block=True)
-    return (processors, models)
-
-def trainCoreModels(pid, training_games, y_key, weigh_recent=False, weigh_outliers=True, test=False, plot=False):
-    processors = {}
-    models = {}
-
-    if test:
-        test_size = 0.3
-    else:
-        test_size = 0.0
-
-    for name, f in CORE_FEATURE_FNS:
-        processors[name] = getProcessor(pid, training_games, f, y_key, weigh_recent=weigh_recent, weigh_outliers=weigh_outliers)
-    for name,proc in processors.iteritems():
-        X = proc.getAllSamples()
-        trendY = proc.getTrendY()
-        realY = proc.getY()
-        print "name: %s, ykey: %s, model: %s, x_len: %s, y_len: %s" % (pid, y_key, name, len(X), len(realY))
-        labels = proc.getFeatureLabels()
-        ra = proc.getRunningAverage()
-        kernel = proc.getKernel()
-
-        framework = GPCrossValidationFramework(kernel, X, realY, test_size=test_size, restarts=10)
-        framework.train(zip_data=None)
-        models[name] = framework
-
-        if test:
-            predicted = []
-            predicted_vars = []
-            for x_test in framework.X_test:
-                means, variances = framework.model.predict(np.array([x_test]))
-                predicted.append(means[0][0])
-                predicted_vars.append(math.sqrt(variances[0][0]))
-
-            
-
-            actual = [_[0] for _ in framework.Y_test]
-            corrs = np.corrcoef(actual, predicted)
-
-            print "%s for %s" % (pid, y_key)
-            print actual
-            print predicted
-            print predicted_vars
-            print "%s: %s" % (name, corrs)
-            #print framework.model['.*lengthscale']
-
-            if plot:
-                indices = [i for i,a in sorted(enumerate(predicted), key=lambda x:x[1])]
-                sorted_actual = [actual[indices[i]] for i in range(len(indices))]
-                sorted_predicted = [predicted[indices[i]] for i in range(len(indices))]
-                sorted_vars = [predicted_vars[indices[i]] for i in range(len(indices))]
-
-                fig = plt.figure()
-                p1 = plt.plot(sorted_actual, marker='o', label='actual')
-                p2 = plt.plot(sorted_predicted, marker='o', label='predicted')
-                p3 = plt.plot(sorted_vars, marker='o', label='vars')
-                fig.suptitle(name, fontsize=20)
-                plt.legend(loc='best', shadow=True)
-    if test and plot:
-        plt.show(block=True)
-    return (processors, models)
-
 
 if __name__ == "__main__":
+    
+    csv_file = "/usr/local/fsai/analysis/data/nba_stats_1.csv"
+    model_file = '/usr/local/fsai/analysis/data/ae_2'
+    sae_file = '/usr/local/fsai/analysis/data/sae_1'
+    pipeline_file = '/usr/local/fsai/analysis/data/pipeline_3'
+    
+    # training a SAE
+    hidden_layer_sizes = [1500, 1500, 1500]
+    corruption_levels = [0.1, 0.2, 0.3]
+    n_outs = 10
+    trainSAE(csv_file, sae_file, pipeline_file, y_key='TRB', limit=50000, 
+             training_epochs=25, training_lr=0.01, finetune_epochs=1000, finetune_lr=0.1,
+             batch_size=1, n_outs=n_outs, hidden_layer_sizes=hidden_layer_sizes, corruption_levels=corruption_levels)
+    sys.exit(1)
+
+    # training an AE
+    trainAE(csv_file, model_file, pipeline_file, y_key='TRB', limit=50000, learning_rate=0.15, epochs=1000, batch_size=50, corruption=0.2)
+    sys.exit(1)
+    
+    # fitting a linear model off autoencoder input for player
+    pid = "curryst01"
+    X, Y = encodePlayerInput(pid, model_file, pipeline_file, y_key='eFG%', limit=100, time=datetime(year=2014,month=10,day=1), min_count=None)
+    model = LinearRegressionValidationFramework(X, Y, test_size=0.25, restarts=10)
+    model.train()
+    print model.test(graph=True)
+    sys.exit(1)
+
+    # fitting a linear model to csv dataset directly
+    dproc = StreamDataPreprocessor(streamCSV(csv_file), limit=3000, clamp=None)
+    Y = dproc.getY('TRB')
+    X = dproc.getAllSamples()
+    labels = dproc.getFeatureLabels()
+    model = LinearRegressionValidationFramework(X, Y, test_size=0.25, restarts=10)
+    #model = RandomForestValidationFramework(X, Y, test_size=0.3, feature_labels=labels, restarts=10)
+    model.train()
+    print model.test(graph=True)
+    sys.exit(1)
+
+
+
+
+
     pid = "irvinky01"
     y_key = 'PTS'
     print "training %s for %s" % (pid, y_key)
@@ -764,9 +759,7 @@ if __name__ == "__main__":
     X = proc.getAllSamples()
     labels = proc.getFeatureLabels()
 
-    for x in X:
-        for a,b in zip(labels,x):
-            print "%s: %s" % (a,b)
+    StreamDataPreprocessor(streamCSV(csv_file), clamp=None)
 
     sys.exit(1)
 
