@@ -3,6 +3,7 @@ TODO: build distributional projections
 """
 
 import sys
+import os
 import re
 import collections
 import random
@@ -10,6 +11,7 @@ import math
 import copy
 import traceback
 import cPickle
+import time
 from datetime import datetime
 
 import simplejson as json
@@ -66,27 +68,34 @@ def encodePlayerInput(pid, model_path, pipeline_path, y_key='PTS', limit=None, t
 
     return (encoded_X, Y)
 
-def getNBATrainingData(file_path, pipeline_path=None, y_key=None, by_class=False, test_size=0.4, limit=10000, n_outs=None):
+def getNBATrainingData(file_path, pipeline_path=None, y_key=None, test_size=0.4, limit=10000, n_outs=None, mean_window=3):
     if y_key is None:
         y_key = 'PTS'
-    dproc = StreamDataPreprocessor(streamCSV(file_path), limit=limit, clamp=2.5, feature_range=(0,1))
+    dproc = StreamDataPreprocessor(streamCSV(file_path), limit=limit, clamp=3, feature_range=(0,1), mean_window=mean_window)
 
     if pipeline_path is not None:
         dproc.dumpPipeline(pipeline_path)
 
-    if by_class:
-        Y = dproc.getClassY(y_key, n_outs, clamp=2.5)
+    if n_outs:
+        Y, Means = dproc.getClassY(y_key, n_outs, clamp=3)
     else:
-        Y = dproc.getY(y_key)
+        Y, Means = dproc.getY(y_key)
 
     X = dproc.getAllSamples()
     labels = dproc.getFeatureLabels()
     
+    # zip the means with y
+    y_and_means = zip(Y, Means)
+
     # split into train/test
-    X_train, X_test, Y_train, Y_test = cross_validation.train_test_split(X, Y, test_size=test_size)
+    X_train, X_test, Y_means_train, Y_means_test = cross_validation.train_test_split(X, y_and_means, test_size=test_size)
+    Y_train = [_[0] for _ in Y_means_train]
     train_set = (X_train, Y_train)
     # split test set into validation/test
-    X_valid, X_test, Y_valid, Y_test = cross_validation.train_test_split(X_test, Y_test, test_size=0.5)
+    X_valid, X_test, Y_means_valid, Y_means_test = cross_validation.train_test_split(X_test, Y_means_test, test_size=0.5)
+    Y_valid = [_[0] for _ in Y_means_valid]
+    Y_test = [_[0] for _ in Y_means_test]
+    Means_test = [_[1] for _ in Y_means_test]
     valid_set = (X_valid, Y_valid)
     test_set = (X_test, Y_test)
 
@@ -94,26 +103,36 @@ def getNBATrainingData(file_path, pipeline_path=None, y_key=None, by_class=False
     test_set_x, test_set_y = shared_dataset(test_set)
     valid_set_x, valid_set_y = shared_dataset(valid_set)
     train_set_x, train_set_y = shared_dataset(train_set)
-    rval = [labels, (train_set_x, train_set_y), (valid_set_x, valid_set_y), (test_set_x, test_set_y)]
+    rval = [labels, (Means_test, Y_test), (train_set_x, train_set_y), (valid_set_x, valid_set_y), (test_set_x, test_set_y)]
 
     return rval
 
-def trainAE(csv_path, model_path, pipeline_path, y_key='PTS', limit=5000, corruption=0.35, learning_rate=0.1, epochs=2000, batch_size=10):
+def trainAE(csv_path, model_path, pipeline_path, y_key='PTS', limit=5000, corruption=0.35, learning_rate=0.1, epochs=2000, batch_size=10, mean_window=3):
     # training a AE
-    labels, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, limit=limit)
+    labels, mean_predictions, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, limit=limit, mean_window=mean_window)
     da = train_dA(labels, train_set, corruption=corruption, learning_rate=learning_rate, training_epochs=epochs, batch_size=batch_size, output_folder='dA_plots')
     pickleModel(model_path, da)
 
 def trainSAE(csv_path, model_path, pipeline_path, y_key='FG%', limit=5000, 
              training_epochs=20, training_lr=0.001, finetune_epochs=1000, finetune_lr=0.1,
-             batch_size=1, hidden_layer_sizes=None, corruption_levels=None, n_outs=None):
+             batch_size=1, hidden_layer_sizes=None, mean_window=3,
+             corruption_type='mask', corruption_levels=None, n_outs=None):
     if n_outs is None:
         n_outs = 20
-    labels, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, by_class=True, limit=limit, n_outs=n_outs)
-    sda = train_SdA(len(labels), train_set, valid_set, test_set, finetune_lr=finetune_lr, pretraining_epochs=training_epochs,
-             pretrain_lr=training_lr, training_epochs=finetune_epochs, hidden_layer_sizes=hidden_layer_sizes, corruption_levels=corruption_levels,
+    labels, mean_predictions, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, limit=limit, n_outs=n_outs, mean_window=mean_window)
+    sda, valid_error, test_error = train_SdA(len(labels), train_set, valid_set, test_set, finetune_lr=finetune_lr, pretraining_epochs=training_epochs,
+             pretrain_lr=training_lr, training_epochs=finetune_epochs, hidden_layer_sizes=hidden_layer_sizes, 
+             corruption_type=corruption_type, corruption_levels=corruption_levels,
              batch_size=batch_size, n_outs=n_outs)
     pickleModel(model_path, sda)
+
+    # get test value of using regress-to-mean prediction
+    all_means, all_ys = mean_predictions
+    all_means = np.array(all_means)
+    all_ys = np.array(all_ys)
+    mean_regress_error = np.mean(abs(all_means - all_ys) / float((n_outs - 1))) * 100.0
+
+    return valid_error, test_error, mean_regress_error
 
 class DataPreprocessor(object):
 
@@ -252,7 +271,7 @@ class StreamDataPreprocessor(DataPreprocessor):
 
     TARGET_KEYS = ['PTS', 'TRB', 'AST', 'eFG%']
 
-    def __init__(self, input_stream, limit=None, feature_range=None, clamp=None, pipeline_path=None):
+    def __init__(self, input_stream, limit=None, feature_range=None, clamp=None, mean_window=1, pipeline_path=None, lazy=False):
         # import data from stream
         self.cont_labels = None
         self.cat_labels = None
@@ -307,65 +326,102 @@ class StreamDataPreprocessor(DataPreprocessor):
         # get Y and trendY
         self.Y = None
         self.trendY = None
-        self.Y = self.calculateY()
-        self.trendY = self.calculateTrendY()
+        self.Means = None
+        if not lazy:
+            self.calculateY(mean_window=mean_window)
+            self.calculateTrendY()
 
-    def calculateY(self):
+    def calculateY(self, mean_window=1):
         ys = []
+        means = []
         to_remove = []
         for i, id_dict in enumerate(self.ids):
             pid = id_dict['player_id']
             gid = id_dict['target_game']
+
             row = player_game_collection.find_one({"player_id" : pid, "game_id" : gid})
-            player_targets = {}
-            bad_sample = False
             if not row:
-                bad_sample = True
-            else:
-                for target_key in self.TARGET_KEYS:
-                    y_val = row.get(target_key)
-                    if y_val is None or y_val == '':
-                        bad_sample = True
-                        break
-                    player_targets[target_key] = y_val
-            if bad_sample:
-                # remove the sample
                 to_remove.append(i)
-            else:
-                ys.append(player_targets)
+                continue
+
+            ts = row['game_time']
+            season_start = datetime(year=ts.year, month=8, day=1)
+            if season_start > ts:
+                season_start = datetime(year=ts.year-1, month=8, day=1)
+            history = list(player_game_collection.find({"player_id": pid, "game_time": {"$lt" : row['game_time'], "$gt" : season_start}, "player_team" : row['player_team']}, limit=mean_window, sort=[("game_time",-1)]))
+            if len(history) == 0:
+                to_remove.append(i)
+                continue
+
+            player_targets = {target_key : row.get(target_key) for target_key in self.TARGET_KEYS}
+            if None in player_targets.values() or '' in player_targets.values():
+                to_remove.append(i)
+                continue
+
+            player_history_avgs = self.averageStats(history, self.TARGET_KEYS, weights=None)
+            if np.nan in player_history_avgs.values():
+                to_remove.append(i)
+                continue
+
+            ys.append(player_targets)
+            means.append(player_history_avgs)
 
         # remove the bad samples
         self.cat_samples = np.delete(self.cat_samples, to_remove, axis=0)
         self.cont_samples = np.delete(self.cont_samples, to_remove, axis=0)
         self.ids = np.delete(self.ids, to_remove, axis=0)
 
-        #print self.cat_samples
-        #print self.cont_samples
-        #print self.ids
+        self.Y = ys
+        self.Means = means
 
-        return ys
+    def averageStats(self, stats, allowed_keys, weights=None):
+        if weights is not None and len(weights) != len(stats):
+            raise Exception("Weights not same length as stats")
+        trajectories = {k:[] for k in allowed_keys}
+        for stat in stats:
+            for k in allowed_keys:
+                trajectories[k].append(stat.get(k))
+        # average out the stats
+        for k,v in trajectories.iteritems():
+            filtered_values = []
+            filtered_weights = []
+            for i,value in enumerate(v):
+                if value is not None and value != '':
+                    new_weight = weights[i] if weights is not None else 1.0
+                    filtered_values.append(value)
+                    filtered_weights.append(new_weight)
+            if len(filtered_values) > 0:
+                trajectories[k] = np.average(filtered_values, weights=filtered_weights)
+            else:
+                trajectories[k] = np.nan
+        return trajectories
+
 
     def calculateTrendY(self):
         pass
 
     def getY(self, key):
-        if key not in self.TARGET_KEYS or self.Y is None:
+        if key not in self.TARGET_KEYS or self.Y is None or self.Means is None:
             raise Exception("Y not computed")
         to_return = [_[key] for _ in self.Y]
-        return to_return
+        to_return_means = [_[key] for _ in self.Means]
+        return to_return, to_return_means
 
     def getClassY(self, key, n_outs, clamp=2):
-        if key not in self.TARGET_KEYS or self.Y is None:
+        if key not in self.TARGET_KEYS or self.Y is None or self.Means is None:
             raise Exception("Y not computed")
         clamp = abs(clamp)
         raw_values = [_[key] for _ in self.Y]
+        mean_values = [_[key] for _ in self.Means]
         # put into class buckets
         scaler = StandardScaler()
         # normalize
         norm_raw = scaler.fit_transform(raw_values)
+        norm_means = scaler.transform(mean_values)
         # put into buckets
         buckets = np.linspace(-clamp,clamp,n_outs-1)
         placements = np.digitize(norm_raw, buckets)
+        class_means = np.digitize(norm_means, buckets)
         '''
         # convert to one-hot encoding, activating the specified bucket
         to_return = []
@@ -375,7 +431,7 @@ class StreamDataPreprocessor(DataPreprocessor):
             to_return.append(vector)
         return to_return
         '''
-        return placements
+        return placements, class_means
 
     def getTrendY(self, key):
         if key not in self.TARGET_KEYS or self.trendY is None:
@@ -708,35 +764,102 @@ def getUpcomingGameFeatures(pid, matched_game):
     return features
 
 
+def optimizeMeanWindow(file_path, windows, limit, y_key, n_outs):
+    dproc = StreamDataPreprocessor(streamCSV(file_path), limit=limit, clamp=3, feature_range=(0,1), lazy=True)
+    for w in sorted(windows,reverse=True):
+        dproc.calculateY(mean_window=w)
+        all_ys, all_means = dproc.getClassY(y_key, n_outs, clamp=3)
+        print all_ys
+        print all_means
+        all_means = np.array(all_means)
+        all_ys = np.array(all_ys)
+        regress_to_mean_error = np.mean(abs(all_means - all_ys) / float((n_outs - 1)))
+        print "REGRESS TO MEAN ERROR (window: %s): %s" % (w, regress_to_mean_error)
+
+
+def optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch, y_key, n_outs, nHLay_choices, nHUnit_choices, 
+                               lRate_choices, lRateSup_choices, nEpoq_choices, v_choices):
+    labels = ['nHLay', 'nHUnit', 'lRate', 'lRateSup', 'nEpoq', 'v_type', 'v', 'n_outs', 'batch_size', 'limit', 'valid_error', 'test_error', 'mean_regress_error']
+    results = []
+    for nHLay, nHUnit, lRate, lRateSup, nEpoq, v_choices in itertools.product(nHLay_choices, nHUnit_choices, lRate_choices, lRateSup_choices, nEpoq_choices, v_choices):
+        n_type, n_choices = v_choices
+        for v in n_choices:   
+            model_file = os.path.join(model_folder,"%slayer_%sunit_%slrate_%ssuplrate_%sbatch%sepoq_%s%s_%sout_%s_model" % (nHLay, nHUnit, lRate, lRateSup, batch, nEpoq, v, n_type, n_outs, y_key))
+            pipeline_file = os.path.join(model_folder,"%slimit_sae_pipeline" % (limit,))
+            hidden_layer_sizes = [nHUnit] * nHLay
+            corruption_levels = [v] * nHLay
+            start = time.time()
+            valid_error, test_error, mean_regress_error = trainSAE(csv_file, model_file, pipeline_file, y_key=y_key, limit=limit, 
+                training_epochs=nEpoq, training_lr=lRate, finetune_epochs=1000, finetune_lr=lRateSup,
+                batch_size=batch, n_outs=n_outs, hidden_layer_sizes=hidden_layer_sizes, 
+                corruption_type=n_type, corruption_levels=corruption_levels,
+                mean_window=0)
+            end = time.time()
+            print "Took %s seconds" % (end-start,)
+            result = [nHLay, nHUnit, lRate, lRateSup, nEpoq, n_type, v, n_outs, batch, limit, valid_error, test_error, mean_regress_error]
+            for k,v in zip(labels, results):
+                print "%s: %s" % (k,v)
+            results.append(result)
+    # write results
+    out_file = open(result_file, 'wb')
+    writer = csv.writer(out_file)
+    writer.writerow(labels)
+    for r in results:
+        writer.writerow(r)
+
+
+
 if __name__ == "__main__":
     
     csv_file = "/usr/local/fsai/analysis/data/nba_stats_1.csv"
+    model_folder = "/usr/local/fsai/analysis/data"
     model_file = '/usr/local/fsai/analysis/data/ae_2'
     sae_file = '/usr/local/fsai/analysis/data/sae_1'
     pipeline_file = '/usr/local/fsai/analysis/data/pipeline_3'
     
-    # training a SAE
-    hidden_layer_sizes = [1500, 1500, 1500]
-    corruption_levels = [0.1, 0.2, 0.3]
-    n_outs = 10
-    trainSAE(csv_file, sae_file, pipeline_file, y_key='TRB', limit=50000, 
-             training_epochs=25, training_lr=0.01, finetune_epochs=1000, finetune_lr=0.1,
-             batch_size=1, n_outs=n_outs, hidden_layer_sizes=hidden_layer_sizes, corruption_levels=corruption_levels)
+    # optimize mean prediction window
+    '''
+    windows = np.arange(0,1)
+    optimizeMeanWindow(csv_file, windows, limit=1000, y_key='TRB', n_outs=15)
+    sys.exit(1)
+    '''
+
+    # training SAE
+    limit = 1000
+    batch = 5
+    y_key = 'TRB'
+    n_outs = 20
+    nHLay_choices = [1]
+    nHUnit_choices = [2000]
+    lRate_choices = [0.005]
+    lRateSup_choices = [0.005]
+    nEpoq_choices = [10]
+    #v_choices = [('gaussian',[0.10]),('mask',[0.15])]
+    v_choices = [('gaussian',[0.10])]
+    result_file = "/usr/local/fsai/analysis/data/results.csv"
+    optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch, y_key, n_outs, nHLay_choices, nHUnit_choices, 
+                               lRate_choices, lRateSup_choices, nEpoq_choices, v_choices)
     sys.exit(1)
 
+
     # training an AE
+    '''
     trainAE(csv_file, model_file, pipeline_file, y_key='TRB', limit=50000, learning_rate=0.15, epochs=1000, batch_size=50, corruption=0.2)
     sys.exit(1)
-    
+    '''
+
     # fitting a linear model off autoencoder input for player
+    '''
     pid = "curryst01"
     X, Y = encodePlayerInput(pid, model_file, pipeline_file, y_key='eFG%', limit=100, time=datetime(year=2014,month=10,day=1), min_count=None)
     model = LinearRegressionValidationFramework(X, Y, test_size=0.25, restarts=10)
     model.train()
     print model.test(graph=True)
     sys.exit(1)
+    '''
 
     # fitting a linear model to csv dataset directly
+    '''
     dproc = StreamDataPreprocessor(streamCSV(csv_file), limit=3000, clamp=None)
     Y = dproc.getY('TRB')
     X = dproc.getAllSamples()
@@ -746,59 +869,4 @@ if __name__ == "__main__":
     model.train()
     print model.test(graph=True)
     sys.exit(1)
-
-
-
-
-
-    pid = "irvinky01"
-    y_key = 'PTS'
-    print "training %s for %s" % (pid, y_key)
-    training_games = findAllTrainingGames(pid)
-    proc = getProcessor(pid, training_games, 'runEncoderFeatures', y_key, weigh_recent=False, weigh_outliers=False)
-    X = proc.getAllSamples()
-    labels = proc.getFeatureLabels()
-
-    StreamDataPreprocessor(streamCSV(csv_file), clamp=None)
-
-    sys.exit(1)
-
-
-
-    realY = proc.getY()
-    kernel = proc.getKernel()
-    framework = GPCrossValidationFramework(kernel, X, realY, test_size=0.3, restarts=10)
-    framework.train(zip_data=None)
-    print framework.model
-
-    predicted = []
-    predicted_vars = []
-    for x_test in framework.X_test:
-        means, variances = framework.model.predict(np.array([x_test]))
-        predicted.append(means[0][0])
-        predicted_vars.append(math.sqrt(variances[0][0]))
-    actual = [_[0] for _ in framework.Y_test]
-    corrs = np.corrcoef(actual, predicted)
-    print "%s for %s" % (pid, y_key)
-    print actual
-    print predicted
-    print predicted_vars
-    print corrs
-
-    if plot:
-        indices = [i for i,a in sorted(enumerate(predicted), key=lambda x:x[1])]
-        sorted_actual = [actual[indices[i]] for i in range(len(indices))]
-        sorted_predicted = [predicted[indices[i]] for i in range(len(indices))]
-        sorted_vars = [predicted_vars[indices[i]] for i in range(len(indices))]
-
-        fig = plt.figure()
-        p1 = plt.plot(sorted_actual, marker='o', label='actual')
-        p2 = plt.plot(sorted_predicted, marker='o', label='predicted')
-        p3 = plt.plot(sorted_vars, marker='o', label='vars')
-        fig.suptitle(name, fontsize=20)
-        plt.legend(loc='best', shadow=True)
-
-
-    sys.exit(1)
-    core_processors, core_models = trainCoreModels(pid, training_games, y_key, weigh_outliers=False, test=True, plot=True)
-    trend_processors, trend_models = trainTrendModels(pid, training_games, y_key, weigh_outliers=False, test=True, plot=True)
+    '''

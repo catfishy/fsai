@@ -99,6 +99,7 @@ class LogisticRegression(object):
         # x is a matrix where row-j  represents input training sample-j
         # b is a vector where element-k represent the free parameter of hyper
         # plain-k
+        self.n_out = n_out
         self.p_y_given_x = T.nnet.softmax(T.dot(input, self.W) + self.b)
 
         # symbolic description of how to compute prediction as class whose
@@ -161,6 +162,7 @@ class LogisticRegression(object):
         if y.dtype.startswith('int'):
             # the T.neq operator returns a vector of 0s and 1s, where 1
             # represents a mistake in prediction
+            return T.mean(abs(self.y_pred - y) / float((self.n_out - 1)))
             return T.mean(T.neq(self.y_pred, y))
         else:
             raise NotImplementedError()

@@ -84,54 +84,15 @@ class dA(object):
         n_hidden=500,
         W=None,
         bhid=None,
-        bvis=None
+        bvis=None,
+        noise_type=None
     ):
-        """
-        Initialize the dA class by specifying the number of visible units (the
-        dimension d of the input ), the number of hidden units ( the dimension
-        d' of the latent or hidden space ) and the corruption level. The
-        constructor also receives symbolic variables for the input, weights and
-        bias. Such a symbolic variables are useful when, for example the input
-        is the result of some computations, or when weights are shared between
-        the dA and an MLP layer. When dealing with SdAs this always happens,
-        the dA on layer 2 gets as input the output of the dA on layer 1,
-        and the weights of the dA are used in the second stage of training
-        to construct an MLP.
 
-        :type numpy_rng: numpy.random.RandomState
-        :param numpy_rng: number random generator used to generate weights
+        if noise_type is None:
+            self.noise_type = 'mask'
+        assert noise_type in ['mask', 'saltpepper', 'gaussian']
+        self.noise_type = noise_type
 
-        :type theano_rng: theano.tensor.shared_randomstreams.RandomStreams
-        :param theano_rng: Theano random generator; if None is given one is
-                     generated based on a seed drawn from `rng`
-
-        :type input: theano.tensor.TensorType
-        :param input: a symbolic description of the input or None for
-                      standalone dA
-
-        :type n_visible: int
-        :param n_visible: number of visible units
-
-        :type n_hidden: int
-        :param n_hidden:  number of hidden units
-
-        :type W: theano.tensor.TensorType
-        :param W: Theano variable pointing to a set of weights that should be
-                  shared belong the dA and another architecture; if dA should
-                  be standalone set this to None
-
-        :type bhid: theano.tensor.TensorType
-        :param bhid: Theano variable pointing to a set of biases values (for
-                     hidden units) that should be shared belong dA and another
-                     architecture; if dA should be standalone set this to None
-
-        :type bvis: theano.tensor.TensorType
-        :param bvis: Theano variable pointing to a set of biases values (for
-                     visible units) that should be shared belong dA and another
-                     architecture; if dA should be standalone set this to None
-
-
-        """
         self.n_visible = n_visible
         self.n_hidden = n_hidden
 
@@ -216,9 +177,15 @@ class dA(object):
                 correctly as it only support float32 for now.
 
         """
-        return self.theano_rng.binomial(size=input.shape, n=1,
-                                        p=1 - corruption_level,
-                                        dtype=theano.config.floatX) * input
+        if self.noise_type == 'mask':
+            return self.theano_rng.binomial(size=input.shape, n=1,
+                                            p=1 - corruption_level,
+                                            dtype=theano.config.floatX) * input
+        elif self.noise_type == 'saltpepper':
+            raise Exception("Not Implemented")
+        elif self.noise_type == 'gaussian':
+            return input + self.theano_rng.normal(size = input.shape, avg = 0,
+                std=corruption_level, dtype=theano.config.floatX)
 
     def get_hidden_values(self, input):
         """ Computes the values of the hidden layer """

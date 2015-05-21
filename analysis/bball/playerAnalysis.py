@@ -1225,6 +1225,8 @@ class NBAFeatureExtractor(object):
         opp_days_since_last = opp_game_deltas[0]
         data['own_days_since_last'] = own_days_since_last
         data['opp_days_since_last'] = opp_days_since_last
+        data['own_games_in_5_days'] = len([_ for _ in own_game_deltas if _ <= 5])
+        data['opp_games_in_5_days'] = len([_ for _ in opp_game_deltas if _ <= 5])
 
         '''
         own_game_index = [0] * 4
@@ -1247,7 +1249,7 @@ class NBAFeatureExtractor(object):
         data['opp_4of5'] = self.CAT_ONE_HOT_ON if (sum(opp_game_index[:4]) >= 3) else self.CAT_ONE_HOT_OFF
         '''
         # serialize
-        cont_labels = ['own_days_since_last', 'opp_days_since_last']
+        cont_labels = ['own_days_since_last', 'opp_days_since_last', 'own_games_in_5_days', 'opp_games_in_5_days']
         cat_labels = ['team_%s' % k for k in self.all_teams] + ['location_%s' % k for k in self.all_locations]
         cat_feature_splits = [len(self.all_teams), len(self.all_locations)]
         cont_features, cat_features = self.serializeFeatures(cont_labels, cat_labels, data)

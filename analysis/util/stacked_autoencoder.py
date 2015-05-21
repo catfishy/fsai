@@ -63,6 +63,7 @@ class SdA(object):
         n_ins=784,
         hidden_layers_sizes=[500, 500],
         n_outs=10,
+        corruption_type='mask',
         corruption_levels=[0.1, 0.1]
     ):
         """ This class is made to support a variable number of layers.
@@ -156,7 +157,8 @@ class SdA(object):
                           n_visible=input_size,
                           n_hidden=hidden_layers_sizes[i],
                           W=sigmoid_layer.W,
-                          bhid=sigmoid_layer.b)
+                          bhid=sigmoid_layer.b,
+                          noise_type=corruption_type)
             self.dA_layers.append(dA_layer)
         # end-snippet-2
         # We now need to add a logistic layer on top of the MLP
@@ -187,6 +189,10 @@ class SdA(object):
         # get last layer output and logistic regress for class probabilities
         p_y_given_x = T.nnet.softmax(T.dot(self.sigmoid_layers[-1].output, self.logLayer.W) + self.logLayer.b)
         return p_y_given_x
+
+    def get_hidden_values(self, x):
+        return self.get_output_value(x)
+
 
     def pretraining_functions(self, train_set_x, batch_size):
         ''' Generates a list of functions, each of them implementing one
@@ -335,7 +341,8 @@ class SdA(object):
 
 
 def train_SdA(input_size, train_set, valid_set, test_set, finetune_lr=0.1, pretraining_epochs=15,
-             pretrain_lr=0.001, training_epochs=1000, hidden_layer_sizes=None, corruption_levels=None, 
+             pretrain_lr=0.001, training_epochs=1000, hidden_layer_sizes=None, 
+             corruption_type='mask', corruption_levels=None, 
              n_outs=10, batch_size=1):
     """
     Demonstrates how to train and test a stochastic denoising autoencoder.
@@ -364,7 +371,7 @@ def train_SdA(input_size, train_set, valid_set, test_set, finetune_lr=0.1, pretr
         corruption_levels = [0.1, 0.2, 0.3]
     elif isinstance(hidden_layer_sizes, list) and isinstance(corruption_levels, list) and len(hidden_layer_sizes) == len(corruption_levels):
         print "Layers: %s" % hidden_layer_sizes
-        print "Corruption: %s" % corruption_levels
+        print "%s Corruption: %s" % (corruption_type, corruption_levels)
     else:
         raise Exception("Invalid hidden layer sizes or corruption levels input")
 
@@ -385,7 +392,9 @@ def train_SdA(input_size, train_set, valid_set, test_set, finetune_lr=0.1, pretr
         numpy_rng=numpy_rng,
         n_ins=input_size,
         hidden_layers_sizes=hidden_layer_sizes,
-        n_outs=n_outs
+        n_outs=n_outs,
+        corruption_levels=corruption_levels,
+        corruption_type=corruption_type
     )
     # end-snippet-3 start-snippet-4
     #########################
@@ -499,7 +508,7 @@ def train_SdA(input_size, train_set, valid_set, test_set, finetune_lr=0.1, pretr
     print >> sys.stderr, ('The training code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %.2fm' % ((end_time - start_time) / 60.))
-    return sda
+    return (sda, best_validation_loss*100., test_score*100.)
 
 if __name__ == '__main__':
     train_SdA()
