@@ -142,6 +142,16 @@ class LogisticRegression(object):
         return -T.mean(T.log(self.p_y_given_x)[T.arange(y.shape[0]), y])
         # end-snippet-2
 
+    def fuzzy_negative_log_likelihood(self, y):
+        '''
+        target = T.log(self.p_y_given_x)[T.arange(y.shape[0]), y]
+        left = T.log(self.p_y_given_x)[T.arange(y.shape[0]), max(y-1,0)]
+        right = T.log(self.p_y_given_x)[T.arange(y.shape[0]), min(y+1,self.n_out-1)]
+        w_avg = (target + 0.5*left + 0.5*right) / 2.0
+        return -T.mean(w_avg)
+        '''
+        return -T.mean(T.log(self.p_y_given_x)[T.arange(y.shape[0]), y])
+
     def errors(self, y):
         """Return a float representing the number of errors in the minibatch
         over the total number of examples of the minibatch ; zero one

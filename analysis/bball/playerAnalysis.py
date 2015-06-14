@@ -274,10 +274,12 @@ class NBAFeatureExtractor(object):
             for k in keys:
                 base_val = base.get(k, None)
                 reflect_val = reflect.get(k, None)
-                if base_val is None or reflect_val is None:
-                    cur_diff[k] = None
-                else:
+                if np.isnan(base_val) or np.isnan(reflect_val):
+                    cur_diff[k] = 0.0
+                elif isinstance(base_val,float) and isinstance(reflect_val,float):
                     cur_diff[k] = base_val - reflect_val
+                else:
+                    cur_diff[k] = 0.0
             differentials.append(cur_diff)
         return differentials
 
@@ -505,7 +507,7 @@ class NBAFeatureExtractor(object):
             -> defensive/offensive stats given up (per position) for a running window, per 48
 
         '''
-        player_stats = player_game_collection.find({"player_id": self.player_id, "player_team" : {"$in" : self.own_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.season_start}}, limit=10, sort=[("game_time",-1)])
+        player_stats = player_game_collection.find({"player_id": self.player_id, "player_team" : {"$in" : self.own_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.season_start}}, sort=[("game_time",-1)])
         player_stats = self.calculateAdditionalPlayerStats(player_stats)
 
         # check enough player stats
@@ -513,8 +515,11 @@ class NBAFeatureExtractor(object):
             raise Exception("Not enough previous games for player %s" % self.player_id)
 
         # get player stats running stat avgs and variances
-        self.player_running_avg = self.averageStats(player_stats, self.PLAYER_STATS)
-        self.player_running_variance = self.varianceStats(player_stats, self.PLAYER_STATS)
+        player_last_matchups = [_ for _ in player_stats if _['game_id'] in self.matchup_gids]
+        self.player_last_matchup_avgs = self.averageStats(player_last_matchups, self.PLAYER_STATS)
+        self.player_season_avg = self.averageStats(player_stats, self.PLAYER_STATS)
+        self.player_running_avg = self.averageStats(player_stats[:10], self.PLAYER_STATS)
+        self.player_running_variance = self.varianceStats(player_stats[:10], self.PLAYER_STATS)
 
         height = self.player_row['height']
         weight = self.player_row['weight']
@@ -538,7 +543,7 @@ class NBAFeatureExtractor(object):
         teamshare_stats = defaultdict(list)
         for g in self.own_last_10_games:
             gid = g['_id']
-            g_players = list(player_game_collection.find({"game_id": gid, "player_team": self.own_team_id}))
+            g_players = list(player_game_collection.find({"game_id": gid, "player_team": {"$in" : self.own_all_ids}}))
             p_row = player_game_collection.find_one({"game_id": gid, "player_id": self.player_id})
             if p_row is None:
                 p_row = {}
@@ -883,16 +888,16 @@ class NBAFeatureExtractor(object):
         self.opp_espn_team_stats = {k:v for k,v in recent_espnstat[self.opp_team_id].iteritems() if k in self.TEAM_ESPN_STATS}
 
         # own season/running avg team stats ( + reflection)
-        own_results = list(team_game_collection.find({"team_id": {"$in" : self.own_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
+        own_results = list(team_game_collection.find({"team_id": {"$in" : self.own_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.season_start}}, 
                                             sort=[("game_time",-1)]))
         if len(own_results) < 2:
             raise Exception("Could not find more than 3 prior games for team: %s" % self.own_all_ids)
         own_reflection_results = [team_game_collection.find_one({"game_id": g['game_id'], "team_id": {"$nin": self.own_all_ids}}) for g in own_results]
-        
         own_results = self.calculateAdditionalTeamStats(own_results, own_reflection_results)
+        own_matchup_results = [own for own,refl in zip(own_results,own_reflection_results) if refl['team_id'] in self.opp_all_ids]
 
-        # difference
-        #own_differentials = self.takeDifference(own_results, own_reflection_results, self.TEAM_STATS)
+        # same gids for later use
+        self.matchup_gids = [_['game_id'] for _ in own_matchup_results]
 
         self.own_most_recent_game = game_collection.find_one({"_id" : own_results[0]['game_id']})
         self.own_last_10 = copy.deepcopy(own_results[:10])
@@ -900,12 +905,13 @@ class NBAFeatureExtractor(object):
         self.own_gametimes = [o['game_time'] for o in own_results[:5]]
         self.own_team_season_avgs = self.averageStats(own_results, self.TEAM_STATS)
         self.own_team_running_avgs = self.averageStats(own_results[:10], self.TEAM_STATS)
+        self.own_team_matchup_avgs = self.averageStats(own_matchup_results[:10], self.TEAM_STATS)
+
         #self.own_reflection_season_avgs = self.averageStats(own_reflection_results, self.TEAM_STATS)
         #self.own_reflection_running_avgs = self.averageStats(own_reflection_results[:10], self.TEAM_STATS)
-        #self.own_differentials_avgs = self.averageStats(own_differentials[:10], self.TEAM_STATS)
 
         # opp season/running avg team stats ( + reflection)
-        opp_results = list(team_game_collection.find({"team_id": {"$in" : self.opp_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.ts - timedelta(days=60)}}, 
+        opp_results = list(team_game_collection.find({"team_id": {"$in" : self.opp_all_ids}, "game_time": {"$lt": self.ts, "$gt": self.season_start}}, 
                                             sort=[("game_time",-1)]))
         if len(opp_results) < 2:
             raise Exception("Could not find more than 3 prior games for team: %s" % self.opp_all_ids)
@@ -913,9 +919,7 @@ class NBAFeatureExtractor(object):
         opp_reflection_results = [team_game_collection.find_one({"game_id": g['game_id'], "team_id": {"$nin": self.opp_all_ids}}) for g in opp_results]
        
         opp_results = self.calculateAdditionalTeamStats(opp_results, opp_reflection_results)
-
-        # difference
-        #opp_differentials = self.takeDifference(opp_results, opp_reflection_results, self.TEAM_STATS)
+        opp_matchup_results = [opp for opp,refl in zip(opp_results,opp_reflection_results) if refl['team_id'] in self.own_all_ids]
 
         self.opp_most_recent_game = game_collection.find_one({"_id" : opp_results[0]['game_id']})
         self.opp_last_10 = copy.deepcopy(opp_results[:10])
@@ -923,9 +927,9 @@ class NBAFeatureExtractor(object):
         self.opp_gametimes = [o['game_time'] for o in opp_results[:5]]
         self.opp_team_season_avgs = self.averageStats(opp_results, self.TEAM_STATS)
         self.opp_team_running_avgs = self.averageStats(opp_results[:10], self.TEAM_STATS)
+        self.opp_team_matchup_avgs = self.averageStats(opp_matchup_results[:10], self.TEAM_STATS)
         #self.opp_reflection_season_avgs = self.averageStats(opp_reflection_results, self.TEAM_STATS)
         #self.opp_reflection_running_avgs = self.averageStats(opp_reflection_results[:10], self.TEAM_STATS)
-        #self.opp_differentials_avgs = self.averageStats(opp_differentials[:10], self.TEAM_STATS)
 
     def calculateAdditionalPlayerStats(self, input_rows):
         '''
@@ -1116,6 +1120,7 @@ class NBAFeatureExtractor(object):
                      'net_indv': copy.deepcopy(self.player_twoman),
                      'net_team': copy.deepcopy(self.player_onoff)
                      }
+
         cat_data = {}
 
         # flatten
@@ -1179,9 +1184,17 @@ class NBAFeatureExtractor(object):
     def trendFeatures(self):
         own_trend_diff = self.takeDifference([self.own_team_season_avgs], [self.own_team_running_avgs], self.TEAM_STATS)[0]
         opp_trend_diff = self.takeDifference([self.opp_team_season_avgs], [self.opp_team_running_avgs], self.TEAM_STATS)[0]
+        own_matchup_trend_diff = self.takeDifference([self.own_team_season_avgs], [self.own_team_matchup_avgs], self.TEAM_STATS)[0]
+        opp_matchup_trend_diff = self.takeDifference([self.opp_team_season_avgs], [self.opp_team_matchup_avgs], self.TEAM_STATS)[0]
+        player_matchup_diff = self.takeDifference([self.player_season_avg], [self.player_last_matchup_avgs], self.PLAYER_STATS)[0]
+
+
 
         data = {'own_recent_trend': own_trend_diff,
                 'opp_recent_trend': opp_trend_diff,
+                'own_matchup_trend': own_matchup_trend_diff,
+                'opp_matchup_trend': opp_matchup_trend_diff,
+                'player_matchup_trend': player_matchup_diff,
                 'invalid_onoffs': copy.deepcopy(self.invalid_onoffs),
                 'invalid_twomans': copy.deepcopy(self.invalid_twomans)}
 
@@ -1366,9 +1379,9 @@ def dumpCSV(filepath, pid=None, limit=None, time=None, min_count=None, save=True
                 count += 1
 
 def parseFeaturesForCSV(arg):
+    id_keys = ['player_id', 'target_game']
     print arg
     try:
-        
         fe = NBAFeatureExtractor(arg['player_id'], arg['team_id'], target_game=arg['target_game'])
         cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = fe.runEncoderFeatures()
         # aggregate keys and encode cat splits into key name
@@ -1383,7 +1396,6 @@ def parseFeaturesForCSV(arg):
         all_dict.update(dict(zip(new_cat_labels, cat_features)))
         
         # aggregate labels and sort features
-        id_keys = ['player_id', 'target_game']
         keys = cont_labels + new_cat_labels
         labels = ["%s#%s" % ('id',_) for _ in id_keys] + keys
         sorted_features = [arg[_] for _ in id_keys]+[all_dict[_] for _ in keys]
@@ -1446,28 +1458,48 @@ def streamCSV(filepath):
                     break
                 cat_feat_splits.append(matching_keys)
             continue
+        count += 1
         cat_labels = []
         cat_features = []
         cont_labels = []
         cont_features = []
         id_labels = []
         id_features = []
+        if len(labels) != len(row):
+            print "CSV ERROR: label and row not same length (%s labels, %s lineitems), line %s" % (len(labels),len(row),count)
+            continue
         values = zip(labels, row)
         for k,v in values:
-            # try to convert v
-            try:
-                v = float(v)
-            except Exception as e:
-                pass
+            id_val = False
+            cat_val = False
+            cont_val = False
             if re.search(id_regex, k):
                 k = k[k.index('#')+1:]
-                id_labels.append(k)
-                id_features.append(v)
+                id_val = True
             elif re.search(cat_regex, k):
                 k = k[k.index('#')+1:]
+                cat_val = True
+            else:
+                cont_val = True
+            if id_val:
+                try:
+                    v = float(v)
+                except Exception as e:
+                    v = v
+                id_labels.append(k)
+                id_features.append(v)
+            elif cat_val:
+                try:
+                    v = float(v)
+                except Exception as e:
+                    v = np.nan
                 cat_labels.append(k)
                 cat_features.append(v)
-            else:
+            elif cont_val:
+                try:
+                    v = float(v)
+                except Exception as e:
+                    v = np.nan
                 cont_labels.append(k)
                 cont_features.append(v)
         id_dict = dict(zip(id_labels, id_features))
@@ -1479,9 +1511,9 @@ def streamCSV(filepath):
 
 
 if __name__=="__main__":
-    
-    #arg = {'player_id': 'parketo01', 'team_id': 'SAS', 'target_game': '200910280SAS'}
-    arg = {'player_id': 'westda01', 'team_id': 'NOH', 'target_game': '201001290NOH'}
+    arg = {'player_id': 'biyombi01', 'team_id': 'CHA', 'target_game': '201404160CHA'}
+    #arg = {'player_id': 'parketo01', 'team_id': 'SAS', 'target_game': '200910310SAS'}
+    #arg = {'player_id': 'westda01', 'team_id': 'NOH', 'target_game': '201001290NOH'}
     #arg = {'player_id': 'curryst01', 'team_id': 'GSW', 'target_game': '201503180GSW'}
     #arg = {'player_id': 'warretj01', 'team_id': 'PHO', 'target_game': '201502250DEN'}
     #arg = {'player_id': 'tollian01', 'team_id': 'DET', 'target_game': '201503310DET'}
@@ -1490,6 +1522,12 @@ if __name__=="__main__":
     fe = NBAFeatureExtractor(arg['player_id'], arg['team_id'], target_game=arg['target_game'], invalids=invalids)
     cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = fe.runEncoderFeatures()
     
+    print len(cont_features)
+    print len(cont_labels)
+    print len(cat_labels)
+    print len(cat_features)
+
+
     for l,v in zip(cat_labels, cat_features):
         print "%s: %s" % (l,v)
 
@@ -1499,7 +1537,7 @@ if __name__=="__main__":
     
     sys.exit(1)
     
-    dumpCSV("/usr/local/fsai/analysis/data/nba_stats_1.csv", pid=None, limit=None, time=None, min_count=None, save=True)
+    dumpCSV("/usr/local/fsai/analysis/data/nba_stats_2.csv", pid=None, limit=None, time=None, min_count=None, save=True)
 
 
 

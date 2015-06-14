@@ -13,6 +13,7 @@ import traceback
 import cPickle
 import time
 from datetime import datetime
+import multiprocessing as mp
 
 import simplejson as json
 import cPickle as pickle
@@ -33,6 +34,7 @@ from statsETL.db.mongolib import *
 from analysis.util.autoencoder import train_dA, shared_dataset
 from analysis.util.stacked_autoencoder import train_SdA
 
+TARGET_KEYS = ['PTS', 'TRB', 'AST', 'eFG%']
 
 def loadModel(filepath):
     return cPickle.load(open(filepath, 'rb'))
@@ -68,10 +70,13 @@ def encodePlayerInput(pid, model_path, pipeline_path, y_key='PTS', limit=None, t
 
     return (encoded_X, Y)
 
-def getNBATrainingData(file_path, pipeline_path=None, y_key=None, test_size=0.4, limit=10000, n_outs=None, mean_window=3):
+def getNBATrainingData(file_path, pipeline_path=None, y_key=None, test_size=0.4, limit=10000, 
+                       n_outs=None, mean_window=3, feature_range=(-1,1)):
     if y_key is None:
         y_key = 'PTS'
-    dproc = StreamDataPreprocessor(streamCSV(file_path), limit=limit, clamp=3, feature_range=(0,1), mean_window=mean_window)
+    dproc = StreamDataPreprocessor(streamCSV(file_path), limit=limit, clamp=3, 
+                                   feature_range=feature_range, mean_window=mean_window,
+                                   pool_size=9)
 
     if pipeline_path is not None:
         dproc.dumpPipeline(pipeline_path)
@@ -113,23 +118,30 @@ def trainAE(csv_path, model_path, pipeline_path, y_key='PTS', limit=5000, corrup
     da = train_dA(labels, train_set, corruption=corruption, learning_rate=learning_rate, training_epochs=epochs, batch_size=batch_size, output_folder='dA_plots')
     pickleModel(model_path, da)
 
-def trainSAE(csv_path, model_path, pipeline_path, y_key='FG%', limit=5000, 
+def trainSAE(data_input, model_path, y_key='FG%',
              training_epochs=20, training_lr=0.001, finetune_epochs=1000, finetune_lr=0.1,
-             batch_size=1, hidden_layer_sizes=None, mean_window=3,
+             batch_size=1, hidden_layer_sizes=None, act='sigmoid', cost='CE',
              corruption_type='mask', corruption_levels=None, n_outs=None):
+    labels, mean_predictions, train_set, valid_set, test_set = data_input
     if n_outs is None:
         n_outs = 20
-    labels, mean_predictions, train_set, valid_set, test_set = getNBATrainingData(csv_path, pipeline_path=pipeline_path, y_key=y_key, limit=limit, n_outs=n_outs, mean_window=mean_window)
+
     sda, valid_error, test_error = train_SdA(len(labels), train_set, valid_set, test_set, finetune_lr=finetune_lr, pretraining_epochs=training_epochs,
              pretrain_lr=training_lr, training_epochs=finetune_epochs, hidden_layer_sizes=hidden_layer_sizes, 
-             corruption_type=corruption_type, corruption_levels=corruption_levels,
+             corruption_type=corruption_type, corruption_levels=corruption_levels, act=act, cost=cost,
              batch_size=batch_size, n_outs=n_outs)
     pickleModel(model_path, sda)
 
     # get test value of using regress-to-mean prediction
     all_means, all_ys = mean_predictions
+
+    '''
+    for m,y in zip(all_means,all_ys):
+        print "Mean: %s, Actual: %s" % (m,y) 
+    '''
     all_means = np.array(all_means)
     all_ys = np.array(all_ys)
+
     mean_regress_error = np.mean(abs(all_means - all_ys) / float((n_outs - 1))) * 100.0
 
     return valid_error, test_error, mean_regress_error
@@ -144,8 +156,7 @@ class DataPreprocessor(object):
         self.findBadContCols()
 
         # normalize cont samples
-        samples = np.array(self.cont_samples)
-        samples = self.imputer.fit_transform(samples)
+        samples = self.imputer.fit_transform(self.cont_samples)
         samples = self.scaler.fit_transform(samples)
         if self.clamp is not None:
             # after standard scaling, convert all values abs(v) > clamp to (+/-)clamp value
@@ -160,9 +171,7 @@ class DataPreprocessor(object):
             self.cont_labels = scipy.delete(self.cont_labels, bad_col, 0)
 
         # normalize cat samples
-        cat_samples = np.array(self.cat_samples)
-        cat_samples = self.cat_minmax.fit_transform(cat_samples)
-        self.cat_samples = cat_samples
+        self.cat_samples = self.cat_minmax.fit_transform(self.cat_samples)
 
     def findBadContCols(self):
         # find features that would be removed after imputing
@@ -267,45 +276,118 @@ class DataPreprocessor(object):
         self.minmax = data['minmax']
         self.cat_minmax = data['cat_minmax']
 
+
+def processCSVLine(row):
+    (id_dict, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits), lazy, mean_window = row
+    cont_labels = np.array(cont_labels)
+    cat_labels = np.array(cat_labels)
+    cat_kernel_splits = np.array(cat_feat_splits)
+    
+    if not lazy:
+        # get Y's
+        pid = id_dict['player_id']
+        gid = id_dict['target_game']
+        row = player_game_collection.find_one({"player_id" : pid, "game_id" : gid})
+        if not row:
+            return 
+
+        ts = row['game_time']
+        season_start = datetime(year=ts.year, month=8, day=1)
+        if season_start > ts:
+            season_start = datetime(year=ts.year-1, month=8, day=1)
+        history = list(player_game_collection.find({"player_id": pid, "game_time": {"$lt" : row['game_time'], "$gt" : season_start}, "player_team" : row['player_team']}, limit=mean_window, sort=[("game_time",-1)]))
+        if len(history) == 0:
+            return
+
+        player_targets = {target_key : row.get(target_key) for target_key in TARGET_KEYS}
+        if None in player_targets.values() or '' in player_targets.values():
+            return
+
+        player_history_avgs = averageStats(history, TARGET_KEYS, weights=None)
+        if np.nan in player_history_avgs.values():
+            return
+    else:
+        player_targets = None
+        player_history_avgs = None
+    return (id_dict, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits, player_targets, player_history_avgs)
+
+def averageStats(stats, allowed_keys, weights=None):
+    if weights is not None and len(weights) != len(stats):
+        raise Exception("Weights not same length as stats")
+    trajectories = {k:[] for k in allowed_keys}
+    for stat in stats:
+        for k in allowed_keys:
+            trajectories[k].append(stat.get(k))
+    # average out the stats
+    for k,v in trajectories.iteritems():
+        filtered_values = []
+        filtered_weights = []
+        for i,value in enumerate(v):
+            if value is not None and value != '':
+                new_weight = weights[i] if weights is not None else 1.0
+                filtered_values.append(value)
+                filtered_weights.append(new_weight)
+        if len(filtered_values) > 0:
+            trajectories[k] = np.average(filtered_values, weights=filtered_weights)
+        else:
+            trajectories[k] = np.nan
+    return trajectories
+
+
 class StreamDataPreprocessor(DataPreprocessor):
 
-    TARGET_KEYS = ['PTS', 'TRB', 'AST', 'eFG%']
-
-    def __init__(self, input_stream, limit=None, feature_range=None, clamp=None, mean_window=1, pipeline_path=None, lazy=False):
+    def __init__(self, input_stream, limit=None, feature_range=None, clamp=None, mean_window=1, pipeline_path=None, lazy=False, pool_size=4):
         # import data from stream
         self.cont_labels = None
         self.cat_labels = None
         self.cat_kernel_splits = None
         self.cat_samples = []
         self.cont_samples = []
+        self.Y = []
+        self.Means = []
         self.ids = []
         count = 0
         sys.stdout.write(str(count))
-        for row in input_stream:
-            id_dict, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits = row
+        args = itertools.izip(input_stream,itertools.repeat(lazy),itertools.repeat(mean_window))
+        pool = mp.Pool(pool_size)
+        results = pool.imap(processCSVLine, args)
+        start = time.time()
+        for r in results:
+            if r is None:
+                continue
+            id_dict, cat_labels, cat_features, cont_labels, cont_features, cat_feat_splits, player_targets, player_history_avgs = r
             if self.cont_labels is None:
-                self.cont_labels = np.array(cont_labels)
+                self.cont_labels = cont_labels
             if self.cat_labels is None:
-                self.cat_labels = np.array(cat_labels)
+                self.cat_labels = cat_labels
             if self.cat_kernel_splits is None:
-                self.cat_kernel_splits = np.array(cat_feat_splits)
+                self.cat_kernel_splits = cat_feat_splits
             self.cat_samples.append(cat_features)
             self.cont_samples.append(cont_features)
             self.ids.append(id_dict)
+            if not lazy: # if lazy, would return None anyway
+                self.Y.append(player_targets)
+                self.Means.append(player_history_avgs)
             count += 1
-            sys.stdout.write('\r' + str(count) + ' ' * 20)
-            sys.stdout.flush()
+            if count % 50 == 0:
+                sys.stdout.write('\r' + str(count) + ' ' * 20)
+                sys.stdout.flush()
             if limit and count >= limit:
-                sys.stdout.write('\n')
+                pool.terminate()
                 break
-        self.cont_samples = np.array(self.cont_samples)
-        self.cat_samples = np.array(self.cat_samples)
-
+        sys.stdout.write('\n')
+        end = time.time()
+        print "Import took: %s seconds" % (end-start,)
         # basic checks
         if not (len(self.cont_samples) == len(self.cat_samples)):
             raise Exception("Inconsistent cat/cont sample counts")
         elif len(self.cont_samples) < 2 and len(self.cat_samples) < 2:
             raise Exception("Need more than one data point")
+
+        self.cont_samples = np.array(self.cont_samples)
+        self.cat_samples = np.array(self.cat_samples)
+        self.Y = np.array(self.Y)
+        self.Means = np.array(self.Means)
 
         # create normalization pipeline, and fit to data if necessary
         if pipeline_path is None:
@@ -322,14 +404,6 @@ class StreamDataPreprocessor(DataPreprocessor):
             self.normalizeSamples()
         else:
             self.loadPipeline(pipeline_path)
-
-        # get Y and trendY
-        self.Y = None
-        self.trendY = None
-        self.Means = None
-        if not lazy:
-            self.calculateY(mean_window=mean_window)
-            self.calculateTrendY()
 
     def calculateY(self, mean_window=1):
         ys = []
@@ -353,12 +427,12 @@ class StreamDataPreprocessor(DataPreprocessor):
                 to_remove.append(i)
                 continue
 
-            player_targets = {target_key : row.get(target_key) for target_key in self.TARGET_KEYS}
+            player_targets = {target_key : row.get(target_key) for target_key in TARGET_KEYS}
             if None in player_targets.values() or '' in player_targets.values():
                 to_remove.append(i)
                 continue
 
-            player_history_avgs = self.averageStats(history, self.TARGET_KEYS, weights=None)
+            player_history_avgs = self.averageStats(history, TARGET_KEYS, weights=None)
             if np.nan in player_history_avgs.values():
                 to_remove.append(i)
                 continue
@@ -374,41 +448,15 @@ class StreamDataPreprocessor(DataPreprocessor):
         self.Y = ys
         self.Means = means
 
-    def averageStats(self, stats, allowed_keys, weights=None):
-        if weights is not None and len(weights) != len(stats):
-            raise Exception("Weights not same length as stats")
-        trajectories = {k:[] for k in allowed_keys}
-        for stat in stats:
-            for k in allowed_keys:
-                trajectories[k].append(stat.get(k))
-        # average out the stats
-        for k,v in trajectories.iteritems():
-            filtered_values = []
-            filtered_weights = []
-            for i,value in enumerate(v):
-                if value is not None and value != '':
-                    new_weight = weights[i] if weights is not None else 1.0
-                    filtered_values.append(value)
-                    filtered_weights.append(new_weight)
-            if len(filtered_values) > 0:
-                trajectories[k] = np.average(filtered_values, weights=filtered_weights)
-            else:
-                trajectories[k] = np.nan
-        return trajectories
-
-
-    def calculateTrendY(self):
-        pass
-
     def getY(self, key):
-        if key not in self.TARGET_KEYS or self.Y is None or self.Means is None:
+        if key not in TARGET_KEYS or self.Y is None or self.Means is None:
             raise Exception("Y not computed")
         to_return = [_[key] for _ in self.Y]
         to_return_means = [_[key] for _ in self.Means]
         return to_return, to_return_means
 
     def getClassY(self, key, n_outs, clamp=2):
-        if key not in self.TARGET_KEYS or self.Y is None or self.Means is None:
+        if key not in TARGET_KEYS or self.Y is None or self.Means is None:
             raise Exception("Y not computed")
         clamp = abs(clamp)
         raw_values = [_[key] for _ in self.Y]
@@ -434,7 +482,7 @@ class StreamDataPreprocessor(DataPreprocessor):
         return placements, class_means
 
     def getTrendY(self, key):
-        if key not in self.TARGET_KEYS or self.trendY is None:
+        if key not in TARGET_KEYS or self.trendY is None:
             raise Exception("Y not computed")
         to_return = [_[key] for _ in self.trendY]
         return to_return
@@ -777,10 +825,24 @@ def optimizeMeanWindow(file_path, windows, limit, y_key, n_outs):
         print "REGRESS TO MEAN ERROR (window: %s): %s" % (w, regress_to_mean_error)
 
 
-def optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch, y_key, n_outs, nHLay_choices, nHUnit_choices, 
-                               lRate_choices, lRateSup_choices, nEpoq_choices, v_choices):
+def optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch, y_key, n_outs, 
+                               nHLay_choices, nHUnit_choices, lRate_choices, lRateSup_choices, 
+                               nEpoq_choices, v_choices, act='sigmoid', cost='CE'):
     labels = ['nHLay', 'nHUnit', 'lRate', 'lRateSup', 'nEpoq', 'v_type', 'v', 'n_outs', 'batch_size', 'limit', 'valid_error', 'test_error', 'mean_regress_error']
-    results = []
+    
+    '''
+    TODO: AUGMENT THIS TO BE MORE SPECIFIC PER ACTIVATION FUNCTION
+    '''
+    if act == 'sigmoid':
+        feature_range=(0,1)
+    else:
+        feature_range=(-1,1)
+
+    data_input = getNBATrainingData(csv_file, y_key=y_key, limit=limit, n_outs=n_outs, feature_range=feature_range)
+    # write results
+    out_file = open(result_file, 'wb')
+    writer = csv.writer(out_file)
+    writer.writerow(labels)
     for nHLay, nHUnit, lRate, lRateSup, nEpoq, v_choices in itertools.product(nHLay_choices, nHUnit_choices, lRate_choices, lRateSup_choices, nEpoq_choices, v_choices):
         n_type, n_choices = v_choices
         for v in n_choices:   
@@ -789,29 +851,22 @@ def optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch
             hidden_layer_sizes = [nHUnit] * nHLay
             corruption_levels = [v] * nHLay
             start = time.time()
-            valid_error, test_error, mean_regress_error = trainSAE(csv_file, model_file, pipeline_file, y_key=y_key, limit=limit, 
+            valid_error, test_error, mean_regress_error = trainSAE(data_input, model_file, y_key=y_key, 
                 training_epochs=nEpoq, training_lr=lRate, finetune_epochs=1000, finetune_lr=lRateSup,
-                batch_size=batch, n_outs=n_outs, hidden_layer_sizes=hidden_layer_sizes, 
-                corruption_type=n_type, corruption_levels=corruption_levels,
-                mean_window=0)
+                batch_size=batch, n_outs=n_outs, hidden_layer_sizes=hidden_layer_sizes, act=act, cost=cost,
+                corruption_type=n_type, corruption_levels=corruption_levels)
             end = time.time()
             print "Took %s seconds" % (end-start,)
             result = [nHLay, nHUnit, lRate, lRateSup, nEpoq, n_type, v, n_outs, batch, limit, valid_error, test_error, mean_regress_error]
-            for k,v in zip(labels, results):
+            for k,v in zip(labels, result):
                 print "%s: %s" % (k,v)
-            results.append(result)
-    # write results
-    out_file = open(result_file, 'wb')
-    writer = csv.writer(out_file)
-    writer.writerow(labels)
-    for r in results:
-        writer.writerow(r)
+            writer.writerow(result)
 
 
 
 if __name__ == "__main__":
     
-    csv_file = "/usr/local/fsai/analysis/data/nba_stats_1.csv"
+    csv_file = "/usr/local/fsai/analysis/data/nba_stats_2.csv"
     model_folder = "/usr/local/fsai/analysis/data"
     model_file = '/usr/local/fsai/analysis/data/ae_2'
     sae_file = '/usr/local/fsai/analysis/data/sae_1'
@@ -826,19 +881,20 @@ if __name__ == "__main__":
 
     # training SAE
     limit = 1000
-    batch = 5
+    batch = 4
     y_key = 'TRB'
     n_outs = 20
-    nHLay_choices = [1]
+    nHLay_choices = [4]
     nHUnit_choices = [2000]
-    lRate_choices = [0.005]
+    lRate_choices = [0.01]
     lRateSup_choices = [0.005]
-    nEpoq_choices = [10]
-    #v_choices = [('gaussian',[0.10]),('mask',[0.15])]
-    v_choices = [('gaussian',[0.10])]
-    result_file = "/usr/local/fsai/analysis/data/results.csv"
+    nEpoq_choices = [15]
+    v_choices = [('gaussian',[0.1])]
+    act='tanh'
+    cost='MSE'
+    result_file = "/usr/local/fsai/analysis/data/results_quick_tanh.csv"
     optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch, y_key, n_outs, nHLay_choices, nHUnit_choices, 
-                               lRate_choices, lRateSup_choices, nEpoq_choices, v_choices)
+                               lRate_choices, lRateSup_choices, nEpoq_choices, v_choices, act=act, cost=cost)
     sys.exit(1)
 
 

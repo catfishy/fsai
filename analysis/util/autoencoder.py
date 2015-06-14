@@ -75,30 +75,45 @@ class dA(object):
 
     """
 
-    def __init__(
-        self,
-        numpy_rng,
-        theano_rng=None,
-        input=None,
-        n_visible=784,
-        n_hidden=500,
-        W=None,
-        bhid=None,
-        bvis=None,
-        noise_type=None
-    ):
+    def __init__(self,
+                 numpy_rng,
+                 theano_rng=None,
+                 input = None,
+                 n_visible= 784,
+                 n_hidden= 500,
+                 tied_weights = True,
+                 act_enc = 'sigmoid',
+                 act_dec = 'sigmoid',
+                 W = None,
+                 W_prime = None,
+                 b = None,
+                 b_prime = None,
+                 noise_type='mask'):
 
-        if noise_type is None:
-            self.noise_type = 'mask'
-        assert noise_type in ['mask', 'saltpepper', 'gaussian']
-        self.noise_type = noise_type
+        # using cPickle serialization
+        self.__initargs__ = copy.copy(locals())
+        del self.__initargs__['self']
 
         self.n_visible = n_visible
-        self.n_hidden = n_hidden
+        self.n_hidden  = n_hidden
+        self.tied_weights = tied_weights
+
+        assert noise_type in set(['mask', 'gaussian', 'saltpepper'])
+        assert act_enc in set(['sigmoid', 'tanh' , 'softplus' , 'rectifier'])
+        assert act_dec in set(['sigmoid', 'softplus', 'linear', 'tanh'])
+        self.noise_type = noise_type
+        self.act_enc = act_enc
+        self.act_dec = act_dec
+
+        # create a numpy random generator
+        # this is used for the initialization of the parameters
+        self.numpy_rng = numpy_rng
 
         # create a Theano random generator that gives symbolic random values
+        # this is used for adding noise to the input
         if not theano_rng:
             theano_rng = RandomStreams(numpy_rng.randint(2 ** 30))
+        self.theano_rng = theano_rng
 
         # note : W' was written as `W_prime` and b' as `b_prime`
         if not W:
@@ -107,53 +122,54 @@ class dA(object):
             # 4*sqrt(6./(n_hidden+n_visible))the output of uniform if
             # converted using asarray to dtype
             # theano.config.floatX so that the code is runable on GPU
-            initial_W = numpy.asarray(
-                numpy_rng.uniform(
-                    low=-4 * numpy.sqrt(6. / (n_hidden + n_visible)),
-                    high=4 * numpy.sqrt(6. / (n_hidden + n_visible)),
-                    size=(n_visible, n_hidden)
-                ),
-                dtype=theano.config.floatX
-            )
-            W = theano.shared(value=initial_W, name='W', borrow=True)
+            initial_W = numpy.asarray(self.numpy_rng.uniform(
+                low  = -4*numpy.sqrt(6./(n_hidden+n_visible)),
+                high =  4*numpy.sqrt(6./(n_hidden+n_visible)),
+                size = (n_visible, n_hidden)), dtype = theano.config.floatX)
+            W = theano.shared(value = initial_W, name ='W')
 
-        if not bvis:
-            bvis = theano.shared(
-                value=numpy.zeros(
-                    n_visible,
-                    dtype=theano.config.floatX
-                ),
-                borrow=True
-            )
+        if not b_prime:
+            b_prime = theano.shared(value = numpy.zeros(n_visible,
+                dtype = theano.config.floatX))
 
-        if not bhid:
-            bhid = theano.shared(
-                value=numpy.zeros(
-                    n_hidden,
-                    dtype=theano.config.floatX
-                ),
-                name='b',
-                borrow=True
-            )
+        if not b:
+            b = theano.shared(value = numpy.zeros(n_hidden,
+                dtype = theano.config.floatX), name ='b')
+
 
         self.W = W
         # b corresponds to the bias of the hidden
-        self.b = bhid
+        self.b = b
         # b_prime corresponds to the bias of the visible
-        self.b_prime = bvis
-        # tied weights, therefore W_prime is W transpose
-        self.W_prime = self.W.T
-        self.theano_rng = theano_rng
+        self.b_prime = b_prime
+
+        if self.tied_weights:
+            self.W_prime = self.W.T
+        else:
+            if not W_prime:
+                # not sure about the initialization
+                initial_W_prime = numpy.asarray(self.numpy_rng.uniform(
+                    low  = -4*numpy.sqrt(6./(n_hidden+n_visible)),
+                    high =  4*numpy.sqrt(6./(n_hidden+n_visible)),
+                    size = (n_hidden, n_visible)), dtype = theano.config.floatX)
+                W_prime = theano.shared(value = initial_W_prime, name ='W_prime')
+
+            self.W_prime = W_prime
+
         # if no input is given, generate a variable representing the input
-        if input is None:
-            # we use a matrix because we expect a minibatch of several
-            # examples, each example being a row
-            self.x = T.dmatrix(name='input')
+        if input == None :
+            # we use a matrix because we expect a minibatch of several examples,
+            # each example being a row
+            self.x = T.dmatrix(name = 'input')
         else:
             self.x = input
 
         self.params = [self.W, self.b, self.b_prime]
-    # end-snippet-1
+
+        if not self.tied_weights:
+            self.params.append(self.W_prime)
+
+        self.output = self.get_hidden_values(self.x)
 
     def get_corrupted_input(self, input, corruption_level):
         """This function keeps ``1-corruption_level`` entries of the inputs the
@@ -189,35 +205,80 @@ class dA(object):
 
     def get_hidden_values(self, input):
         """ Computes the values of the hidden layer """
-        return T.nnet.sigmoid(T.dot(input, self.W) + self.b)
+        if self.act_enc == 'sigmoid':
+            return T.nnet.sigmoid(T.dot(input, self.W) + self.b)
+        elif self.act_enc == 'tanh':
+                return T.tanh(T.dot(input, self.W) + self.b)
+        elif self.act_enc == 'softplus':
+            def softplus(x):
+                return T.log(1. + T.exp(x))
+            return softplus(T.dot(input, self.W) + self.b)
+        elif self.act_enc == 'rectifier':
+            def rectifier(x):
+                return x*(x>0)
+            return  rectifier(T.dot(input, self.W) + self.b)
+        else:
+            raise NotImplementedError('Encoder function %s is not implemented yet' \
+                %(self.act_enc))
 
-    def get_reconstructed_input(self, hidden):
-        """Computes the reconstructed input given the values of the
-        hidden layer
+    def get_reconstructed_input(self, hidden ):
+        """ Computes the reconstructed input given the values of the hidden layer """
+        if self.act_dec == 'sigmoid':
+            return  T.nnet.sigmoid(T.dot(hidden, self.W_prime) + self.b_prime)
+        elif self.act_dec == 'tanh':
+            return T.tanh(T.dot(hidden, self.W_prime) + self.b_prime)
+        elif self.act_dec == 'linear':
+            return T.dot(hidden, self.W_prime) + self.b_prime
+        elif self.act_dec == 'softplus':
+            def softplus(x):
+                    return T.log(1. + T.exp(x))
+            return softplus(T.dot(hidden, self.W_prime) + self.b_prime)
+        else:
+            raise NotImplementedError('Decoder function %s is not implemented yet' \
+                %(self.act_dec))
 
-        """
-        return T.nnet.sigmoid(T.dot(hidden, self.W_prime) + self.b_prime)
-
-    def get_cost_updates(self, corruption_level, learning_rate):
+    def get_cost_updates(self, corruption_level, learning_rate, cost = 'CE', reg = 0.0):
         """ This function computes the cost and the updates for one trainng
         step of the dA """
+
         tilde_x = self.get_corrupted_input(self.x, corruption_level)
         y = self.get_hidden_values(tilde_x)
         z = self.get_reconstructed_input(y)
-        # note : we sum over the size of a datapoint; if we are using
-        #        minibatches, L will be a vector, with one entry per
-        #        example in minibatch
-        L = - T.sum(self.x * T.log(z) + (1 - self.x) * T.log(1 - z), axis=1)
-        # note : L is now a vector, where each element is the
-        #        cross-entropy cost of the reconstruction of the
-        #        corresponding example of the minibatch. We need to
-        #        compute the average of all these to get the cost of
-        #        the minibatch
+        Jacobien = self.W * T.reshape(y*(1.-y),(self.n_hidden,))
+        # note : we sum over the size of a datapoint; if we are using minibatches,
+        #        L will  be a vector, with one entry per example in minibatch
+        if cost == 'CE':
+            if self.act_enc == 'tanh':
+                # Moving the range of tanh from [-1;1] to [0;1]
+                L = - T.sum( ((self.x+1)/2)*T.log(z) + (1-((self.x+1)/2))*T.log(1-z), axis=1 )
+            else:
+                L = - T.sum( self.x*T.log(z) + (1-self.x)*T.log(1-z), axis=1 )  
+        elif cost == 'MSE':
+            L = T.sum( (self.x-z)**2, axis=1 )
+        elif cost == 'jacobiCE':
+            if self.act_enc == 'tanh':
+                # Moving the range of tanh from [-1;1] to [0;1]
+                L = - T.sum( ((self.x+1)/2)*T.log(z) + (1-((self.x+1)/2))*T.log(1-z), axis=1 )\
+                    + reg * T.sum(Jacobien**2)
+            else:
+                L = - T.sum( self.x*T.log(z) + (1-self.x)*T.log(1-z), axis=1 )\
+                    +  reg * T.sum(Jacobien**2)
+        elif cost == 'jacobiMSE':
+            L = T.sum((self.x - z)**2, axis=1) + reg * T.sum(Jacobien**2)
+        else:
+            raise NotImplementedError('This cost function %s is not implemented yet' \
+                %(cost))
+
+        # note : L is now a vector, where each element is the cross-entropy cost
+        #        of the reconstruction of the corresponding example of the
+        #        minibatch. We need to compute the average of all these to get
+        #        the cost of the minibatch
         cost = T.mean(L)
 
         # compute the gradients of the cost of the `dA` with respect
         # to its parameters
         gparams = T.grad(cost, self.params)
+        
         # generate the list of updates
         updates = [
             (param, param - learning_rate * gparam)
@@ -258,13 +319,19 @@ def train_dA(labels, train_set, learning_rate=0.1, training_epochs=15,
     rng = numpy.random.RandomState(123)
     theano_rng = RandomStreams(rng.randint(2 ** 30))
 
-    da = dA(
-        numpy_rng=rng,
-        theano_rng=theano_rng,
-        input=x,
-        n_visible=len(labels),
-        n_hidden=n_hidden
-    )
+    da = dA(numpy_rng=rng,
+            theano_rng=theano_rng,
+            input=x,
+            n_visible=len(labels),
+            n_hidden=n_hidden,
+            tied_weights = True,
+            act_enc = 'sigmoid',
+            act_dec = 'sigmoid',
+            W = None,
+            W_prime = None,
+            b = None,
+            b_prime = None,
+            noise_type='mask')
 
     cost, updates = da.get_cost_updates(
         corruption_level=corruption,

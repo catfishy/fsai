@@ -64,7 +64,10 @@ class SdA(object):
         hidden_layers_sizes=[500, 500],
         n_outs=10,
         corruption_type='mask',
-        corruption_levels=[0.1, 0.1]
+        corruption_levels=[0.1, 0.1],
+        act='sigmoid',
+        cost='CE',
+        reg=0.0
     ):
         """ This class is made to support a variable number of layers.
 
@@ -95,8 +98,10 @@ class SdA(object):
         self.dA_layers = []
         self.params = []
         self.n_layers = len(hidden_layers_sizes)
-
+        self.cost = cost
+        self.reg = reg
         assert self.n_layers > 0
+        assert self.cost in set(['CE', 'MSE', 'jacobiCE', 'jacobiMSE'])
 
         if not theano_rng:
             theano_rng = RandomStreams(numpy_rng.randint(2 ** 30))
@@ -152,13 +157,19 @@ class SdA(object):
             # Construct a denoising autoencoder that shared weights with this
             # layer
             dA_layer = dA(numpy_rng=numpy_rng,
-                          theano_rng=theano_rng,
-                          input=layer_input,
-                          n_visible=input_size,
-                          n_hidden=hidden_layers_sizes[i],
-                          W=sigmoid_layer.W,
-                          bhid=sigmoid_layer.b,
-                          noise_type=corruption_type)
+                    theano_rng=theano_rng,
+                    input=layer_input,
+                    n_visible=input_size,
+                    n_hidden=hidden_layers_sizes[i],
+                    tied_weights = True,
+                    act_enc = 'sigmoid',
+                    act_dec = 'sigmoid',
+                    W=sigmoid_layer.W,
+                    W_prime=None,
+                    b=sigmoid_layer.b,
+                    b_prime=None,
+                    noise_type=corruption_type)
+
             self.dA_layers.append(dA_layer)
         # end-snippet-2
         # We now need to add a logistic layer on top of the MLP
@@ -173,7 +184,9 @@ class SdA(object):
 
         # compute the cost for second phase of training,
         # defined as the negative log likelihood
-        self.finetune_cost = self.logLayer.negative_log_likelihood(self.y)
+        #self.finetune_cost = self.logLayer.negative_log_likelihood(self.y)
+        self.finetune_cost = self.logLayer.fuzzy_negative_log_likelihood(self.y)
+
         # compute the gradients with respect to the model parameters
         # symbolic variable that points to the number of errors made on the
         # minibatch given by self.x and self.y
@@ -225,8 +238,7 @@ class SdA(object):
         pretrain_fns = []
         for dA in self.dA_layers:
             # get the cost and the updates list
-            cost, updates = dA.get_cost_updates(corruption_level,
-                                                learning_rate)
+            cost, updates = dA.get_cost_updates(corruption_level, learning_rate, cost=self.cost, reg =self.reg)
             # compile the theano function
             fn = theano.function(
                 inputs=[
@@ -342,7 +354,7 @@ class SdA(object):
 
 def train_SdA(input_size, train_set, valid_set, test_set, finetune_lr=0.1, pretraining_epochs=15,
              pretrain_lr=0.001, training_epochs=1000, hidden_layer_sizes=None, 
-             corruption_type='mask', corruption_levels=None, 
+             corruption_type='mask', corruption_levels=None, act='sigmoid', cost='CE',
              n_outs=10, batch_size=1):
     """
     Demonstrates how to train and test a stochastic denoising autoencoder.
@@ -394,8 +406,12 @@ def train_SdA(input_size, train_set, valid_set, test_set, finetune_lr=0.1, pretr
         hidden_layers_sizes=hidden_layer_sizes,
         n_outs=n_outs,
         corruption_levels=corruption_levels,
-        corruption_type=corruption_type
+        corruption_type=corruption_type,
+        act=act,
+        cost=cost,
+        reg=0.0
     )
+
     # end-snippet-3 start-snippet-4
     #########################
     # PRETRAINING THE MODEL #
