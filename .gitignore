@@ -29,3 +29,5 @@
 
 *.pyc
 *~
+
+.DS_Store
