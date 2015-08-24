@@ -12,14 +12,35 @@ from collections import defaultdict
 import traceback
 
 from bs4 import BeautifulSoup, element
-import requests
 from pymongo.helpers import DuplicateKeyError
 
 from statsETL.db.mongolib import *
-from statsETL.bball.NBAcrawler import crawlUpcomingGames
 from statsETL.util.crawler import *
 from analysis.util.kimono import updateNBARosters
-from analysis.bball.gameAnalysis import modelPlayersInUpcomingGames
+
+def crawlBRPlayer(player_name):
+    player_search = '+'.join([_.strip() for _ in player_name.split(' ')])
+    url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
+    crawled = False
+    try:
+        links = getAllLinks(url)
+        if len(links) == 0:
+            raise Exception("No search results found")
+        p_crawler = playerCrawler(refresh=True)
+        p_crawler.createLogger()
+        for l in links:
+            if re.match(re.compile('^/players/.*html$'), l['href']):
+                print l
+                new_url = "http://www.basketball-reference.com" + l['href'].strip()
+                new_crawled = p_crawler.crawlPage(url)
+                crawled = new_crawled or crawled
+    except Exception as e:
+        print "Unable to crawl BR Player %s: %s" % (player_name, e)
+        print traceback.print_exc()
+        return False
+    if crawled:
+        return True
+
 
 
 class teamCrawler(Crawler):
@@ -651,7 +672,6 @@ class gameCrawler(Crawler):
             self.crawlGamePage(url, soup)
             return True
         return False
-
 
 class playerCrawler(Crawler):
 

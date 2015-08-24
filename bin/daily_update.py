@@ -6,7 +6,7 @@ from datetime import datetime
 from statsETL.bball.BRcrawler import playerCrawler, teamCrawler, gameCrawler
 from statsETL.bball.NBAcrawler import crawlUpcomingGames, crawlNBATrackingStats, saveNBADepthChart
 from analysis.util.kimono import getESPNTeamStats, updateNBARosters
-from analysis.bball.gameAnalysis import modelPlayersInUpcomingGames
+#from analysis.bball.gameAnalysis import modelPlayersInUpcomingGames
 
 
 if __name__=="__main__":
@@ -50,9 +50,9 @@ if __name__=="__main__":
         p_crawl = playerCrawler(refresh=True)
         t_crawl = teamCrawler(refresh=True)
         g_crawl = gameCrawler(refresh=True, days_back=2000, end_date=datetime(year=2015,month=4,day=18))
-        #t_crawl.run()
+        #g_crawl.run()
         #p_crawl.run()
-        g_crawl.run()
+        p_crawl.run()
     if model:
         # create logger
         logger = logging.getLogger("player_modeling")

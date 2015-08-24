@@ -3,7 +3,6 @@ import sys
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# TODO: start mongod
 # TODO: move config params to different file
 
 MONGOD_HOST = 'localhost'
@@ -27,9 +26,8 @@ class MongoConn:
         doc_id = coll.insert(doc)
         return doc_id
 
-    def updateDocument(self, coll, doc):
-        doc_id = doc['_id']
-        result = coll.update_one({"_id": doc_id}, doc)
+    def updateDocument(self, coll, row_id, doc, upsert=False):
+        result = coll.update_one({"_id": row_id}, {'$set' : doc}, upsert=upsert)
         return result
 
     def saveDocument(self, coll, doc):
@@ -113,6 +111,11 @@ espn_depth_collection = nba_conn.getCollection("depthcharts")
 advanced_collection = nba_conn.getCollection("advanced")
 onoff_collection = nba_conn.getCollection("onoff")
 two_man_collection = nba_conn.getCollection("two_man")
+shot_chart_collection = nba_conn.getCollection("shot_chart")
+shot_collection = nba_conn.getCollection("shot")
+defense_collection = nba_conn.getCollection("defense")
+rebound_collection = nba_conn.getCollection("rebound")
+pass_collection = nba_conn.getCollection("pass")
 
 # ensure indices
 nba_conn.ensureIndex(team_collection, [("url", 1)])
@@ -131,3 +134,18 @@ nba_conn.ensureIndex(espn_depth_collection, [('time', 1)], unique=True)
 nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
 nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
 nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)
+nba_conn.ensureIndex(shot_chart_collection, [("player_id", 1),("game_id", 1),("time", 1)], unique=True)
+nba_conn.ensureIndex(shot_collection, [("player_id", 1),("game_id", 1),("time", 1)], unique=True)
+nba_conn.ensureIndex(defense_collection, [("player_id", 1),("game_id", 1),("year", 1)], unique=True)
+nba_conn.ensureIndex(rebound_collection, [("player_id", 1),("game_id", 1),("year", 1)], unique=True)
+nba_conn.ensureIndex(pass_collection, [("player_id", 1),("game_id", 1),("year", 1)], unique=True)
+
+def convertESPNPlayerID(PID):
+    '''
+    Converts espn player id to BR player id
+    '''
+    row = player_collection.find_one({'espn_id': PID})
+    return row['_id']
+
+
+

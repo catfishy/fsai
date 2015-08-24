@@ -3,13 +3,16 @@ from collections import defaultdict
 import re
 import csv
 import StringIO
-
 import requests
+import pandas as pd
 from bs4 import BeautifulSoup, element
 from pymongo.helpers import DuplicateKeyError
+import dateutil.parser
+import traceback
 
 from statsETL.db.mongolib import *
 from statsETL.util.crawler import *
+from statsETL.bball.BRcrawler import crawlBRPlayer
 
 def crawlUpcomingGames(days_ahead=7):
     dates = []
@@ -27,6 +30,336 @@ def updateNBARosterURLS(roster_urls):
 def saveNBADepthChart():
     dcrawl = depthCrawler()
     dcrawl.run()
+
+def crawlESPNPlayerData():
+    #years_back=[2009,2010,2011,2012,2013,2014,2015]
+    years_back=[2013,2014,2015]
+    url_template = "http://stats.nba.com/stats/commonallplayers?IsOnlyCurrentSeason=1&LeagueID=00&Season=%s"
+    for yr in years_back:
+        start_year = int(yr)
+        end_year = start_year+1
+        season_start = datetime(year=start_year, month=1, day=1)
+        season_end = datetime(year=end_year, month=1, day=1)
+        Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
+        players_url = url_template % (Season,)
+        print players_url
+        response = requests.get(players_url)
+        headers = response.json()['resultSets'][0]['headers']
+        players = response.json()['resultSets'][0]['rowSet']
+        players_df = pd.DataFrame(players, columns=headers)
+        players_df[['FROM_YEAR', 'TO_YEAR']] = players_df[['FROM_YEAR', 'TO_YEAR']].astype(int)
+        valid_players = players_df.loc[players_df['TO_YEAR'] >= 2007]
+        for vp in valid_players.iterrows():
+            vp = vp[1]
+            player_name =  ' '.join(vp['DISPLAY_LAST_COMMA_FIRST'].split(',')[::-1])
+            player_id = vp['PERSON_ID']
+            team_id = vp['TEAM_ID']
+            team_city = vp['TEAM_CITY']
+            team_name = vp['TEAM_NAME']
+            team_abbrev = vp['TEAM_ABBREVIATION']
+            # match the player up to a BR ID
+            br_player_id = convertESPNPlayerID(player_id)
+            if br_player_id is None:
+                continue
+            # match team up with a BR ID
+            full_teamname = "%s %s" % (team_city, team_name)
+            full_teamname = full_teamname.strip()
+            if full_teamname != '':
+                team_row_id = translateTeamNames([full_teamname])[full_teamname]
+                team_to_set = {'espn_id': team_id}
+                nba_conn.updateDocument(team_collection, team_row_id, team_to_set, upsert=False)
+            # crawl player info and player shot chart data
+            crawlNBAShotChart(br_player_id, player_id, yr)
+            crawlNBAShot(br_player_id, player_id, yr)
+            crawlNBADefense(br_player_id, player_id, yr)
+            crawlNBARebound(br_player_id, player_id, yr)
+            crawlNBAPass(br_player_id, player_id, yr)
+
+
+def crawlNBAPlayerInfo(PID):
+    url_template = "http://stats.nba.com/stats/commonplayerinfo?LeagueID=00&PlayerID=%s&SeasonType=Regular+Season"
+    info_url = url_template % PID
+    response = requests.get(info_url)
+    headers = response.json()['resultSets'][0]['headers']
+    info = response.json()['resultSets'][0]['rowSet']
+    info_df = pd.DataFrame(info, columns=headers)
+    return info_df
+
+
+def crawlNBAShotChart(br_player_id, PID, year):
+    url_template = ("http://stats.nba.com/stats/shotchartdetail?CFID=33&CFPARAMS=%s&"
+                    "ContextFilter=&ContextMeasure=FGA&DateFrom=&DateTo=&GameID=&GameSegment=&LastNGames=0&"
+                    "LeagueID=00&Location=&MeasureType=Base&Month=0&OpponentTeamID=0&Outcome=&PaceAdjust=N&"
+                    "PerMode=PerGame&Period=0&PlayerID=%s&PlusMinus=N&Position=&Rank=N&RookieYear=&"
+                    "Season=%s&SeasonSegment=&SeasonType=Regular+Season&TeamID=0&VsConference=&"
+                    "VsDivision=&mode=Advanced&showDetails=0&showShots=1&showZones=0")
+    start_year = int(year)
+    end_year = start_year+1
+    season_start = datetime(year=start_year, month=1, day=1)
+    season_end = datetime(year=end_year, month=1, day=1)
+    Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
+    shot_chart_url = url_template % (Season, PID, Season)
+    print shot_chart_url
+    response = requests.get(shot_chart_url)
+    if 'resultSets' not in response.json():
+        print "No shot chart data found"
+        return
+    headers = response.json()['resultSets'][0]['headers']
+    shots = response.json()['resultSets'][0]['rowSet']
+    shot_df = pd.DataFrame(shots, columns=headers)
+    if shot_df.size == 0:
+        print "No shot chart data found"
+        return
+    for idx, row in shot_df.iterrows():
+        period = int(row['PERIOD'])
+        min_rem = int(row['MINUTES_REMAINING'])
+        sec_rem = int(row['SECONDS_REMAINING'])
+        ts = "%s-%s:%s" % (period, min_rem, sec_rem)
+        data = dict(row)
+        data['time'] = ts
+        data['player_id'] = br_player_id
+        data['espn_id'] = data.pop('PLAYER_ID')
+        try:
+            data['game_id'] = convertESPNGameID(row.pop('GAME_ID'))
+        except Exception as e:
+            print e
+            continue
+        print data
+        try:
+            nba_conn.saveDocument(shot_chart_collection, data)
+        except DuplicateKeyError as e:
+            continue
+    return shot_df
+
+def convertESPNPlayerID(player_id):
+    # try looking in db
+    db_row = player_collection.find_one({'espn_id': player_id})
+    if db_row is not None:
+        return db_row['_id']
+    # match the player up to a BR ID
+    nba_info = crawlNBAPlayerInfo(player_id)
+    birthstamp = nba_info['BIRTHDATE'].values[0]
+    player_name = nba_info['DISPLAY_FIRST_LAST'].values[0]
+    print player_name
+    birthstamp_year = birthstamp.split('T')[0].strip()
+    birthstamp_datetime = datetime.strptime(birthstamp_year, "%Y-%m-%d")
+    player_dict = translatePlayerNames([player_name], player_birthdays=[birthstamp_datetime])[player_name]
+    if len(player_dict) == 0: # try to crawl for it
+        new_crawl = crawlBRPlayer(player_name)
+        if new_crawl:
+            # re-search
+            player_dict = translatePlayerNames([player_name], player_birthdays=[birthstamp_datetime])[player_name]
+    if len(player_dict) == 0:
+        print "No match for %s, %s" % (player_name, birthstamp_datetime)
+        return None
+    if len(player_dict) > 1:
+        print 'SOLVE AMBIGUITY: %s' % player_dict
+        return None
+    player_row = player_dict[0]
+    br_player_id = player_row['_id']
+    nba_conn.updateDocument(player_collection, br_player_id, {'espn_id': player_id}, upsert=False)
+    return br_player_id
+
+
+def convertESPNGameID(GID):
+    '''
+    Converts espn game id to BR game id
+    '''
+    # try finding in db
+    result = game_collection.find_one({"espn_id": GID})
+    if result is not None:
+        return result['_id']
+    # go to espn for it
+    url = "http://stats.nba.com/stats/boxscoresummaryv2?GameID=%s" % GID
+    response = requests.get(url)
+    linescore = None
+    for rs in response.json()['resultSets']:
+        if rs['name'] == 'LineScore':
+            linescore = rs
+            break
+    if linescore is None:
+        raise Exception("Can't find Line Score")
+    headers = linescore['headers']
+    teams = linescore['rowSet']
+    game_df = pd.DataFrame(teams, columns=headers)
+    # find corresponding game
+    team1_row = game_df.loc[0]
+    team2_row = game_df.loc[1]
+    team1_name = "%s %s" % (team1_row['TEAM_CITY_NAME'],team1_row['TEAM_NICKNAME'])
+    team2_name = "%s %s" % (team2_row['TEAM_CITY_NAME'],team2_row['TEAM_NICKNAME'])
+    team_abbrevs = translateTeamNames([team1_name, team2_name])
+    team1_id = team_abbrevs[team1_name]
+    team2_id = team_abbrevs[team2_name]
+    date = dateutil.parser.parse(team1_row['GAME_DATE_EST'])
+    # look for game
+    query = {"teams": team1_id, "time" : {'$gte': date, '$lte': date+timedelta(days=1)}}
+    result = game_collection.find_one(query)
+    if result is None:
+        query['teams'] = team2_id
+        result = game_collection.find_one(query)
+    if result is not None:
+        # save the id
+        nba_conn.updateDocument(game_collection, result['_id'], {'espn_id': GID}, upsert=False)
+        return result['_id']
+    else:
+        raise Exception("Can't find Game for espn ID: %s, %s" % (GID, query))
+
+def crawlNBAShot(br_player_id, PID, year):
+    url_template = ("http://stats.nba.com/stats/playerdashptshotlog?DateFrom=&DateTo=&"
+                    "GameSegment=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&"
+                    "Outcome=&Period=0&PlayerID=%s&Season=%s&SeasonSegment=&"
+                    "SeasonType=Regular+Season&TeamID=0&VsConference=&VsDivision=")
+    start_year = int(year)
+    end_year = start_year+1
+    season_start = datetime(year=start_year, month=1, day=1)
+    season_end = datetime(year=end_year, month=1, day=1)
+    Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
+    shot_chart_url = url_template % (PID, Season)
+    print shot_chart_url
+    response = requests.get(shot_chart_url)
+    if 'resultSets' not in response.json():
+        print "No shot data found"
+        return
+    headers = response.json()['resultSets'][0]['headers']
+    shots = response.json()['resultSets'][0]['rowSet']
+    shot_df = pd.DataFrame(shots, columns=headers)
+    if shot_df.size == 0:
+        print "No shot data found"
+        return
+    # get br player id, br game id, and parse gametime, then save
+    for idx, row in shot_df.iterrows():
+        period = int(row['PERIOD'])
+        game_clock = row['GAME_CLOCK'].split(':')
+        min_rem = int(game_clock[0])
+        sec_rem = int(game_clock[1])
+        ts = "%s-%s:%s" % (period, min_rem, sec_rem)
+        print ts
+        data = dict(row)
+        print data
+        data['time'] = ts
+        data['player_id'] = br_player_id
+        data['espn_id'] = PID
+        # convert closest defender id
+        def_id = row['CLOSEST_DEFENDER_PLAYER_ID']
+        br_def_id = convertESPNPlayerID(def_id)
+        if br_def_id is None:
+            br_def_id = ''
+        data['CLOSEST_DEFENDER_BR_PLAYER_ID'] = def_id
+        try:
+            data['game_id'] = convertESPNGameID(row.pop('GAME_ID'))
+        except Exception as e:
+            print e
+            continue
+        try:
+            nba_conn.saveDocument(shot_collection, data)
+        except DuplicateKeyError as e:
+            continue
+    return shot_df
+
+def crawlNBADefense(br_player_id, PID, year):
+    url_template = ("http://stats.nba.com/stats/playerdashptshotdefend?"
+                    "DateFrom=&DateTo=&GameSegment=&LastNGames=0&LeagueID=00&"
+                    "Location=&Month=0&OpponentTeamID=0&Outcome=&PerMode=PerGame&Period=0&"
+                    "PlayerID=%s&Season=%s&SeasonSegment=&SeasonType=Regular+Season&"
+                    "TeamID=0&VsConference=&VsDivision=")
+    start_year = int(year)
+    end_year = start_year+1
+    season_start = datetime(year=start_year, month=1, day=1)
+    season_end = datetime(year=end_year, month=1, day=1)
+    Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
+    shot_chart_url = url_template % (PID, Season)
+    print shot_chart_url
+    response = requests.get(shot_chart_url)
+    print "Response: %s" % response.json()
+    if 'resultSets' not in response.json():
+        print "No shot data found"
+        return
+    headers = response.json()['resultSets'][0]['headers']
+    shots = response.json()['resultSets'][0]['rowSet']
+    shot_df = pd.DataFrame(shots, columns=headers)
+    if shot_df.size == 0:
+        print "No defense data found"
+        return
+    # get br player id, br game id, and parse gametime, then save
+    for idx, row in shot_df.iterrows():
+        data = dict(row)
+        data['player_id'] = br_player_id
+        data['espn_id'] = PID
+        data['year'] = year
+        try:
+            nba_conn.saveDocument(defense_collection, data)
+        except DuplicateKeyError as e:
+            continue
+    return shot_df
+
+def crawlNBARebound(br_player_id, PID, year):
+    url_template = ("http://stats.nba.com/stats/playerdashptreb?"
+                    "DateFrom=&DateTo=&GameSegment=&LastNGames=0&LeagueID=00&Location=&"
+                    "Month=0&OpponentTeamID=0&Outcome=&PerMode=PerGame&Period=0&"
+                    "PlayerID=%s&Season=%s&SeasonSegment=&SeasonType=Regular+Season&"
+                    "TeamID=0&VsConference=&VsDivision=")
+    start_year = int(year)
+    end_year = start_year+1
+    season_start = datetime(year=start_year, month=1, day=1)
+    season_end = datetime(year=end_year, month=1, day=1)
+    Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
+    shot_chart_url = url_template % (PID, Season)
+    print shot_chart_url
+    response = requests.get(shot_chart_url)
+    if 'resultSets' not in response.json():
+        print "No shot data found"
+        return
+    headers = response.json()['resultSets'][0]['headers']
+    shots = response.json()['resultSets'][0]['rowSet']
+    shot_df = pd.DataFrame(shots, columns=headers)
+    if shot_df.size == 0:
+        print "No rebound data found"
+        return
+    # get br player id, br game id, and parse gametime, then save
+    for idx, row in shot_df.iterrows():
+        data = dict(row)
+        data['player_id'] = br_player_id
+        data['espn_id'] = PID
+        data['year'] = year
+        try:
+            nba_conn.saveDocument(rebound_collection, data)
+        except DuplicateKeyError as e:
+            continue
+    return shot_df
+
+def crawlNBAPass(br_player_id, PID, year):
+    url_template = ("http://stats.nba.com/stats/playerdashptpass?"
+                    "DateFrom=&DateTo=&GameSegment=&LastNGames=0&LeagueID=00&Location=&Month=0&"
+                    "OpponentTeamID=0&Outcome=&PerMode=PerGame&Period=0&PlayerID=%s&Season=%s&"
+                    "SeasonSegment=&SeasonType=Regular+Season&TeamID=0&VsConference=&VsDivision=")
+    start_year = int(year)
+    end_year = start_year+1
+    season_start = datetime(year=start_year, month=1, day=1)
+    season_end = datetime(year=end_year, month=1, day=1)
+    Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
+    shot_chart_url = url_template % (PID, Season)
+    print shot_chart_url
+    response = requests.get(shot_chart_url)
+    if 'resultSets' not in response.json():
+        print "No shot data found"
+        return
+    headers = response.json()['resultSets'][0]['headers']
+    shots = response.json()['resultSets'][0]['rowSet']
+    shot_df = pd.DataFrame(shots, columns=headers)
+    if shot_df.size == 0:
+        print "No pass data found"
+        return
+    # get br player id, br game id, and parse gametime, then save
+    for idx, row in shot_df.iterrows():
+        data = dict(row)
+        data['player_id'] = br_player_id
+        data['espn_id'] = PID
+        data['year'] = year
+        try:
+            nba_conn.saveDocument(pass_collection, data)
+        except DuplicateKeyError as e:
+            continue
+    return shot_df
 
 def crawlNBATrackingStats():
     pullup_address = ("pullup", "http://stats.nba.com/js/data/sportvu/pullUpShootData.js")
@@ -84,20 +417,33 @@ def crawlNBATrackingStats():
         except DuplicateKeyError as e:
             print "%s espn player stats already saved" % today
 
-def translatePlayerNames(player_list):
-    player_dicts = {}
+def translatePlayerNames(player_list, player_birthdays=None):
+    if player_birthdays is not None and len(player_birthdays) != len(player_list):
+        raise Exception("Player birthdays must be same length and order as player names")
+    player_dicts = defaultdict(list)
     unmatched = []
-    for d in player_list:
+    matched = []
+    for i, d in enumerate(player_list):
         query = createPlayerRegex(d)
-        full_matched = player_collection.find_one({'full_name' : {'$regex' : query}})
-        nick_matched = player_collection.find_one({'nickname' : {'$regex' : query}})
-        if nick_matched or full_matched:
-            match_obj = nick_matched or full_matched # value nickname matches more
-            player_dicts[d] = match_obj
-        else:
-            print "%s, no match: %s" % (d, query)
-            unmatched.append(d)
-    return player_dicts
+        full_name_query = {'full_name' : {'$regex' : query}}
+        nickname_query = {'nickname' : {'$regex' : query}}
+        if player_birthdays is not None:
+            bd = player_birthdays[i]
+            if bd:
+                full_name_query['born'] = bd
+                nickname_query['born'] = bd
+        full_matched = player_collection.find(full_name_query)
+        nick_matched = player_collection.find(nickname_query)
+        for match_obj in nick_matched: 
+            player_dicts[d].append(match_obj)
+        if len(player_dicts[d]) == 0:
+            for match_obj in full_matched:
+                player_dicts[d].append(match_obj)
+        if len(player_dicts[d]) == 0:
+            print "NO MATCH %s" % d
+        elif len(player_dicts[d]) > 1:
+            print "AMBIGUITY %s" % d
+    return dict(player_dicts)
 
 def createPlayerRegex(raw_string):
     '''
@@ -400,11 +746,20 @@ class upcomingGameCrawler(Crawler):
         return gametime
 
 if __name__=="__main__":
+
+    # crawl upcoming games
     '''
     today = datetime.now() + timedelta(int(1))
     gl_crawl = upcomingGameCrawler(date=[today])
     gl_crawl.crawlPage()
     crawlNBATrackingStats()
     '''
-    saveNBADepthChart()
 
+    '''
+    # get depth chart
+    saveNBADepthChart()
+    '''
+
+    # get shot chart data
+    players = crawlESPNPlayerData()
+    print players

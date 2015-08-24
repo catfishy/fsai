@@ -11,6 +11,39 @@ import time
 from bs4 import BeautifulSoup, element
 import requests
 
+def getAllLinks(url):
+    init_response = requests.get(url, timeout=10)
+    init_content = init_response.content
+    init_soup = BeautifulSoup(init_content)
+    links = [_ for _ in init_soup.findAll('a')]
+    return links
+
+def crawlBRPlayer(player_name):
+    player_search = '+'.join([_.strip() for _ in player_name.split(' ')])
+    url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
+    crawled = None
+    try:
+        links = getAllLinks(url)
+        if len(links) == 0:
+            raise Exception("No search results found")
+        p_crawler = playerCrawler(refresh=True)
+        p_crawler.createLogger()
+        for l in links:
+            if '/players/' in l['href']:
+                new_url = "http://www.basketball-reference.com" + l['href'].strip()
+                soup = p_crawler.getContent(new_url)
+                if p_crawler.isPlayerPage(url, soup):
+                    p_crawler.crawlPlayerPage(url, soup)
+                    data = p_crawler.crawlPage(new_url)
+                    crawled = True
+    except Exception as e:
+        print "Unable to crawl BR Player %s: %s" % (player_name, e)
+        print traceback.print_exc()
+        return False
+    if crawled:
+        return True
+
+
 class MultiprocessCrawler(object):
 
     '''

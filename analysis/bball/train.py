@@ -1,7 +1,3 @@
-"""
-TODO: build distributional projections
-"""
-
 import sys
 import os
 import re
@@ -86,9 +82,10 @@ def getNBATrainingData(file_path, pipeline_path=None, y_key=None, test_size=0.4,
     else:
         Y, Means = dproc.getY(y_key)
 
+
     X = dproc.getAllSamples()
     labels = dproc.getFeatureLabels()
-    
+
     # zip the means with y
     y_and_means = zip(Y, Means)
 
@@ -736,8 +733,6 @@ class GPCrossValidationFramework(CrossValidationFramework):
             self.X_train = np.array(self.X_train)
             self.X_test = np.array(self.X_test)
 
-        # TODO: weight more recent samples heavily
-
         # add new axis for Y, as needed by GPy
         self.Y_train = np.array(self.Y_train)[:, np.newaxis]
         self.Y_test = np.array(self.Y_test)[:, np.newaxis]
@@ -880,19 +875,19 @@ if __name__ == "__main__":
     '''
 
     # training SAE
-    limit = 1000
-    batch = 4
+    limit = 50000
+    batch = 5
     y_key = 'TRB'
-    n_outs = 20
-    nHLay_choices = [4]
-    nHUnit_choices = [2000]
-    lRate_choices = [0.01]
-    lRateSup_choices = [0.005]
+    n_outs = 12
+    nHLay_choices = [3]
+    nHUnit_choices = [4000]
+    lRate_choices = [0.1]
+    lRateSup_choices = [0.02]
     nEpoq_choices = [15]
-    v_choices = [('gaussian',[0.1])]
+    v_choices = [('mask',[0.2])]
     act='tanh'
-    cost='MSE'
-    result_file = "/usr/local/fsai/analysis/data/results_quick_tanh.csv"
+    cost='CE'
+    result_file = "/usr/local/fsai/analysis/data/results_mask_tanh_ce.csv"
     optimizeSAEHyperParameters(csv_file, model_folder, result_file, limit, batch, y_key, n_outs, nHLay_choices, nHUnit_choices, 
                                lRate_choices, lRateSup_choices, nEpoq_choices, v_choices, act=act, cost=cost)
     sys.exit(1)

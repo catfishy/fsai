@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 from statsETL.db.mongolib import *
 
 
-def findAllTrainingGames(pid=None, limit=None, time=None, min_count=None):
+def findAllTrainingGames(pid=None, limit=None, time=None, min_count=None, mp_limit=8):
     # find all training games
     query = {}
     if pid:
@@ -36,7 +36,7 @@ def findAllTrainingGames(pid=None, limit=None, time=None, min_count=None):
 
     args = []
     for game in playergames:
-        if game['MP'] == 0.0:
+        if game['MP'] < float(mp_limit):
             continue
         # create args
         new_arg = {}
@@ -468,6 +468,9 @@ class NBAFeatureExtractor(object):
 
 
     def getAdvancedStatsForPlayer(self, player_id, team_ids, filter_keys):
+        '''
+        TODO CHANGE THIS TO ESPN ADVANCED STATS
+        '''
         advanced_rows = list(advanced_collection.find({"player_id" : player_id, "team_id" : {"$in" : team_ids}, "time" : {"$gt" : self.season_start, "$lt" : self.season_start + timedelta(365)}}))
         if len(advanced_rows) == 0:
             raise Exception("Could not find valid advanced stats row for %s, %s, %s" % (player_id, team_ids, self.season_start))
@@ -528,8 +531,9 @@ class NBAFeatureExtractor(object):
                                'weight' : weight,
                                'shoots' : shoots}
 
+
         '''
-        # get espn stats
+        # TODO CHANGE THIS TO NEW ESPN ADVANCED STATS
         espn_rows = espn_player_stat_collection.find({"player_id" : self.player_id, "time" : {"$gt" : self.season_start}})
         chosen_espn_row = sorted(espn_rows, key=lambda x: abs(self.ts - x['time']))[0]
         self.player_espn_stats = {k: chosen_espn_row[k] for k in self.ESPN_TRACKING_STATS}
@@ -1110,13 +1114,13 @@ class NBAFeatureExtractor(object):
         cont_data = {'physical' : copy.deepcopy(self.physical_stats),
                      'advanced' : copy.deepcopy(self.player_advanced_stats),
                      'teamshare' : copy.deepcopy(self.teamshare),
-                     'opp_starter' : copy.deepcopy(self.opp_starter_avgs),
-                     'opp_backup' : copy.deepcopy(self.opp_backup_avgs),
-                     'opp_starter_advanced': copy.deepcopy(self.pos_starter_advanced_stats),
-                     'opp_backup_advanced': copy.deepcopy(self.pos_backup_advanced_stats),
+                     #'opp_starter' : copy.deepcopy(self.opp_starter_avgs),
+                     #'opp_backup' : copy.deepcopy(self.opp_backup_avgs),
+                     #'opp_starter_advanced': copy.deepcopy(self.pos_starter_advanced_stats),
+                     #'opp_backup_advanced': copy.deepcopy(self.pos_backup_advanced_stats),
                      'own' : copy.deepcopy(self.player_running_avg),
                      'opp_pos_givenup': copy.deepcopy(self.opp_pos_givenup),
-                     'opp_pos_earned': copy.deepcopy(self.opp_pos_earned),
+                     #'opp_pos_earned': copy.deepcopy(self.opp_pos_earned),
                      'net_indv': copy.deepcopy(self.player_twoman),
                      'net_team': copy.deepcopy(self.player_onoff)
                      }
@@ -1152,8 +1156,8 @@ class NBAFeatureExtractor(object):
         '''
         for each team: espn stats, running avg, running opp average
         '''
-        data = {'own_espn_team_stats': copy.deepcopy(self.own_espn_team_stats),
-                'opp_espn_team_stats': copy.deepcopy(self.opp_espn_team_stats),
+        data = {#'own_espn_team_stats': copy.deepcopy(self.own_espn_team_stats),
+                #'opp_espn_team_stats': copy.deepcopy(self.opp_espn_team_stats),
                 'own_team_running_avgs': copy.deepcopy(self.own_team_running_avgs),
                 'opp_team_running_avgs': copy.deepcopy(self.opp_team_running_avgs),
                 'own_play_distr': copy.deepcopy(self.own_play_distr_sum),
@@ -1188,15 +1192,14 @@ class NBAFeatureExtractor(object):
         opp_matchup_trend_diff = self.takeDifference([self.opp_team_season_avgs], [self.opp_team_matchup_avgs], self.TEAM_STATS)[0]
         player_matchup_diff = self.takeDifference([self.player_season_avg], [self.player_last_matchup_avgs], self.PLAYER_STATS)[0]
 
-
-
         data = {'own_recent_trend': own_trend_diff,
                 'opp_recent_trend': opp_trend_diff,
                 'own_matchup_trend': own_matchup_trend_diff,
                 'opp_matchup_trend': opp_matchup_trend_diff,
                 'player_matchup_trend': player_matchup_diff,
-                'invalid_onoffs': copy.deepcopy(self.invalid_onoffs),
-                'invalid_twomans': copy.deepcopy(self.invalid_twomans)}
+                #'invalid_onoffs': copy.deepcopy(self.invalid_onoffs),
+                #'invalid_twomans': copy.deepcopy(self.invalid_twomans)
+                }
 
         # flatten data
         top_keys = data.keys()
@@ -1263,8 +1266,10 @@ class NBAFeatureExtractor(object):
         '''
         # serialize
         cont_labels = ['own_days_since_last', 'opp_days_since_last', 'own_games_in_5_days', 'opp_games_in_5_days']
-        cat_labels = ['team_%s' % k for k in self.all_teams] + ['location_%s' % k for k in self.all_locations]
-        cat_feature_splits = [len(self.all_teams), len(self.all_locations)]
+        #cat_labels = ['team_%s' % k for k in self.all_teams] + ['location_%s' % k for k in self.all_locations]
+        #cat_feature_splits = [len(self.all_teams), len(self.all_locations)]
+        cat_labels = ['location_%s' % k for k in self.all_locations]
+        cat_feature_splits = [len(self.all_locations)]
         cont_features, cat_features = self.serializeFeatures(cont_labels, cat_labels, data)
 
         return (cat_labels, cat_features, cont_labels, cont_features, cat_feature_splits)
