@@ -16,9 +16,8 @@ from pymongo.helpers import DuplicateKeyError
 
 from statsETL.db.mongolib import *
 from statsETL.util.crawler import *
-from analysis.util.kimono import updateNBARosters
 
-def crawlBRPlayer(player_name):
+def crawlBRPlayer(player_name, player_crawler=None):
     player_search = '+'.join([_.strip() for _ in player_name.split(' ')])
     url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
     crawled = False
@@ -26,13 +25,16 @@ def crawlBRPlayer(player_name):
         links = getAllLinks(url)
         if len(links) == 0:
             raise Exception("No search results found")
-        p_crawler = playerCrawler(refresh=True)
-        p_crawler.createLogger()
+        if isinstance(player_crawler, playerCrawler):
+            p_crawler = player_crawler
+        else:
+            p_crawler = playerCrawler(refresh=True, current_only=False)
+            p_crawler.createLogger()
         for l in links:
             if re.match(re.compile('^/players/.*html$'), l['href']):
                 print l
                 new_url = "http://www.basketball-reference.com" + l['href'].strip()
-                new_crawled = p_crawler.crawlPage(url)
+                new_crawled = p_crawler.crawlPage(new_url)
                 crawled = new_crawled or crawled
     except Exception as e:
         print "Unable to crawl BR Player %s: %s" % (player_name, e)
@@ -40,7 +42,6 @@ def crawlBRPlayer(player_name):
         return False
     if crawled:
         return True
-
 
 
 class teamCrawler(Crawler):
@@ -681,11 +682,11 @@ class playerCrawler(Crawler):
     WHITELIST = ["/players/"]
     PROCESSES = 8
 
-    def __init__(self, refresh=False, logger=None):
+    def __init__(self, refresh=False, logger=None, current_only=True):
         super(playerCrawler, self).__init__(logger=logger)
         self.name = "playerCrawler"
         self.nba_conn = MongoConn(db=NBA_DB)
-
+        self.current_only = current_only
         self.refresh=refresh
 
     def isPlayerPage(self, url, soup):
@@ -702,21 +703,20 @@ class playerCrawler(Crawler):
         info_boxes = soup(id="info_box")
         if len(info_boxes) > 0:
             info_box = info_boxes[0]
-            spans = info_box(text=re.compile("Experience\:"))
-            if len(spans) > 0:
-                return True
+            if self.current_only: 
+                if len(info_box(text=re.compile("Experience\:"))) == 0:
+                    return False
+            return True
         return False
 
     def crawlPlayerPage(self, url, soup):
         player_id = url.split('/')[-1].replace('.html','')
         self.logger.info("Crawling PLAYER: %s" % player_id)
-        info_boxes = soup(id="info_box")
-        info_box = info_boxes[0]
+        info_box = soup(id="info_box")[0]
+        stat_titles = info_box("span", class_="bold_text")
         name_p = info_box("p", class_="margin_top")[0]
         nickname = info_box('h1')[0].string
         full_name = name_p("span", class_="bold_text")[0].string
-        stat_p = info_box("p", class_="padding_bottom_half")[0]
-        stat_titles = stat_p("span", class_="bold_text")
         data = {'_id': player_id,
                 'full_name': full_name,
                 'nickname': nickname,
@@ -724,8 +724,8 @@ class playerCrawler(Crawler):
                 }
         valid_fields = ['position','shoots','height','weight','born','nba debut','experience']
         for title_tag in stat_titles:
-            title = title_tag.string
-            title = title.replace(':','').lower().strip()
+            title = title_tag.string.replace(':','').lower().strip() 
+            print title
             if title in valid_fields:
                 if title == 'born':
                     birth_span = soup(id="necro-birth")[0]

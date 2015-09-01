@@ -1,4 +1,6 @@
 import sys
+import simplejson as json
+import pandas as pd
 
 from pymongo import MongoClient
 from bson.objectid import ObjectId
@@ -103,7 +105,7 @@ game_collection = nba_conn.getCollection("games")
 team_collection = nba_conn.getCollection("teams")
 player_collection = nba_conn.getCollection("players")
 upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
-future_collection = nba_conn.getCollection("future") # for future nba games
+upcoming_game_collection = nba_conn.getCollection("upcoming_games") # for future nba games
 projection_collection = nba_conn.getCollection("projections") # for modeling projections by player
 espn_stat_collection = nba_conn.getCollection("espnstats") # for espn team stats
 espn_player_stat_collection = nba_conn.getCollection("espnplayerstats")
@@ -116,10 +118,12 @@ shot_collection = nba_conn.getCollection("shot")
 defense_collection = nba_conn.getCollection("defense")
 rebound_collection = nba_conn.getCollection("rebound")
 pass_collection = nba_conn.getCollection("pass")
+espn_games_collection = nba_conn.getCollection("espn_games")
 
 # ensure indices
 nba_conn.ensureIndex(team_collection, [("url", 1)])
 nba_conn.ensureIndex(player_collection, [("url", 1)])
+nba_conn.ensureIndex(player_collection, [("nba_id", 1)])
 nba_conn.ensureIndex(team_game_collection, [("team_id", 1)])
 nba_conn.ensureIndex(team_game_collection, [("game_id", 1)])
 nba_conn.ensureIndex(player_game_collection, [("player_id", 1)])
@@ -139,13 +143,22 @@ nba_conn.ensureIndex(shot_collection, [("player_id", 1),("game_id", 1),("time", 
 nba_conn.ensureIndex(defense_collection, [("player_id", 1),("game_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(rebound_collection, [("player_id", 1),("game_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(pass_collection, [("player_id", 1),("game_id", 1),("year", 1)], unique=True)
+nba_conn.ensureIndex(espn_games_collection, [("date", 1)])
 
-def convertESPNPlayerID(PID):
-    '''
-    Converts espn player id to BR player id
-    '''
-    row = player_collection.find_one({'espn_id': PID})
-    return row['_id']
+def getGameData(game_id):
+    row = espn_games_collection.find_one({"_id": game_id})
+    if not row:
+        print "Could not find game %s" % game_id
+        return
+    data = {}
+    for k,v in row.iteritems():
+        try:
+            loaded = json.loads(v)
+            parsed = pd.read_json(v)
+        except:
+            parsed = v
+        data[k] = parsed
+    return data
 
 
 

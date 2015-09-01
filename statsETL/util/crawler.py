@@ -7,9 +7,40 @@ import math
 from datetime import datetime, timedelta
 import calendar
 import time
+import pandas as pd
 
 from bs4 import BeautifulSoup, element
 import requests
+
+def logItem(logname, newline):
+    if not isinstance(newline, str):
+        newline = "%s" % (newline,)
+    newline = newline.strip()
+    with open(logname, 'a') as logout:
+        logout.write("%s\n" % newline)
+
+def chunker(seq, size):
+    return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
+
+def daterange(start_date, end_date):
+    for n in range(int ((end_date - start_date).days)):
+        yield start_date + timedelta(n)
+
+def turnJSONtoPD(url):
+    results = {}
+    try:
+        response = requests.get(url)
+    except requests.exceptions.ConnectionError as e:
+        print "Connection Error to %s" % url
+        raise e
+    for rs in response.json().get('resultSets',[]):
+        name = rs['name']
+        headers = rs['headers']
+        rows = rs['rowSet']
+        df = pd.DataFrame(rows, columns=headers)
+        results[name] = df
+    return results
+
 
 def getAllLinks(url):
     init_response = requests.get(url, timeout=10)
@@ -17,31 +48,6 @@ def getAllLinks(url):
     init_soup = BeautifulSoup(init_content)
     links = [_ for _ in init_soup.findAll('a')]
     return links
-
-def crawlBRPlayer(player_name):
-    player_search = '+'.join([_.strip() for _ in player_name.split(' ')])
-    url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
-    crawled = None
-    try:
-        links = getAllLinks(url)
-        if len(links) == 0:
-            raise Exception("No search results found")
-        p_crawler = playerCrawler(refresh=True)
-        p_crawler.createLogger()
-        for l in links:
-            if '/players/' in l['href']:
-                new_url = "http://www.basketball-reference.com" + l['href'].strip()
-                soup = p_crawler.getContent(new_url)
-                if p_crawler.isPlayerPage(url, soup):
-                    p_crawler.crawlPlayerPage(url, soup)
-                    data = p_crawler.crawlPage(new_url)
-                    crawled = True
-    except Exception as e:
-        print "Unable to crawl BR Player %s: %s" % (player_name, e)
-        print traceback.print_exc()
-        return False
-    if crawled:
-        return True
 
 
 class MultiprocessCrawler(object):
