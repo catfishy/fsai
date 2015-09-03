@@ -66,14 +66,16 @@ def crawlNBAGames(date_start,date_end):
     date_start = datetime.strptime(date_start, '%m/%d/%Y')
     date_end = datetime.strptime(date_end, "%m/%d/%Y")
     pool = mp.Pool(processes=8)
-    for dc in chunker([_ for _ in daterange(date_start, date_end)], 100):
-        arg_chunk = []
-        for date in dc:
+    arg_chunk = []
+    def args(date_start, date_end):
+        for date in daterange(date_start, date_end):
+            print date
             # find games for the day
             url = "http://stats.nba.com/stats/scoreboardV2?DayOffset=0&LeagueID=00&gameDate=%s" % date.strftime("%m/%d/%Y")
             try:
                 results = turnJSONtoPD(url)
             except Exception as e:
+                print "Exception crawling game day page %s" % date
                 continue
             games = results.get('GameHeader', None)
             if games is None or len(games) == 0:
@@ -83,15 +85,19 @@ def crawlNBAGames(date_start,date_end):
                 gid = g['GAME_ID']
                 season = g['SEASON']
                 to_yield = (gid, date, season)
-                arg_chunk.append(to_yield)
-        pool.map_async(crawlNBAGameData, arg_chunk)
+                yield to_yield
+    print date_start
+    print date_end
+    for i, _ in enumerate(pool.imap_unordered(crawlNBAGameData, args(date_start, date_end)), 1): 
+        pass
     pool.close()
     pool.join()
 
 
 def crawlNBAGameData(args):
+    print "crawling %s" % (args,)
     game_id, date, season = args
-    print "crawling %s, %s, %s" % (game_id, date, season)
+
     url_template_summary = "http://stats.nba.com/stats/boxscoresummaryv2?GameID=%s"
     url_template_traditional = ("http://stats.nba.com/stats/boxscoretraditionalv2?"
                                 "EndPeriod=10&EndRange=28800&GameID=%s&RangeType=0&"
@@ -152,6 +158,7 @@ def crawlNBAGameData(args):
         nba_conn.saveDocument(nba_games_collection, all_results)
     except DuplicateKeyError as e:
         pass
+    return game_id
 
 def findNBAPlayer(pid, crawl=True):
     query = {"_id": pid}
@@ -297,7 +304,6 @@ def crawlNBAShotChart(PID, year):
         data['time'] = ts
         data['nba_id'] = data.pop('PLAYER_ID')
         data['game_id'] = data.pop('GAME_ID')
-        print data
         try:
             nba_conn.saveDocument(shot_chart_collection, data)
         except DuplicateKeyError as e:
@@ -333,9 +339,7 @@ def crawlNBAShot(PID, year):
         min_rem = int(game_clock[0])
         sec_rem = int(game_clock[1])
         ts = "%s-%s:%s" % (period, min_rem, sec_rem)
-        print ts
         data = dict(row)
-        print data
         data['time'] = ts
         data['nba_id'] = PID
         data['game_id'] = data.pop('GAME_ID')
@@ -502,6 +506,7 @@ def crawlNBATrackingStats():
         except DuplicateKeyError as e:
             print "%s espn player stats already saved" % today
 
+'''
 def translatePlayerNames(player_list, player_birthdays=None):
     logname = 'player_translation_problems.txt'
 
@@ -543,9 +548,6 @@ def translatePlayerNames(player_list, player_birthdays=None):
     return dict(player_dicts)
 
 def createPlayerRegex(raw_string):
-    '''
-    Includes Hardcoded translations
-    '''
     translations = {"Patty": "Patrick",
                     "JJ": "J.J.",
                     "KJ": "K.J.",
@@ -561,6 +563,7 @@ def createPlayerRegex(raw_string):
     if query:
         query += '.*'
     return re.compile(query)
+'''
 
 def translateTeamNames(team_list):
     team_dicts = {}
@@ -862,6 +865,12 @@ if __name__=="__main__":
     print players
     '''
 
+    '''
+    args = (u'0020700425', datetime(2007, 12, 28, 0, 0), u'2007')
+    crawlNBAGameData(args)
+    sys.exit(1)
+    '''
+
     # get espn games
-    crawlNBAGames('09/01/2007','09/01/2015')
+    crawlNBAGames('10/01/2007','10/01/2015')
     

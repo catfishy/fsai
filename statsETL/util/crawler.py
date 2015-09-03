@@ -23,7 +23,13 @@ def chunker(seq, size):
     return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
 
 def daterange(start_date, end_date):
-    for n in range(int ((end_date - start_date).days)):
+    total_days = int((end_date - start_date).days)
+    print "Total days in range: %s" % total_days
+    for n in range(total_days):
+        to_yield = start_date + timedelta(n)
+        # cut out summer months
+        if to_yield.month in set([7,8,9]):
+            continue
         yield start_date + timedelta(n)
 
 def turnJSONtoPD(url):
