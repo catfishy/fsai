@@ -28,7 +28,7 @@ def crawlBRPlayer(player_name, player_crawler=None):
         if isinstance(player_crawler, playerCrawler):
             p_crawler = player_crawler
         else:
-            p_crawler = playerCrawler(refresh=True, current_only=False)
+            p_crawler = playerCrawler(refresh=False, current_only=False)
             p_crawler.createLogger()
         for l in links:
             if re.match(re.compile('^/players/.*html$'), l['href']):
