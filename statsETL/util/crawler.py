@@ -38,8 +38,14 @@ def turnJSONtoPD(url):
         response = requests.get(url)
     except requests.exceptions.ConnectionError as e:
         print "Connection Error to %s" % url
-        raise e
-    for rs in response.json().get('resultSets',[]):
+        return results
+    #print "%s: %s" % (url, response.status_code)
+    try:
+        response = response.json()
+    except Exception as e:
+        print "JSON Decode Error to %s: %s" % (url, response)
+        return results
+    for rs in response.get('resultSets',[]):
         name = rs['name']
         headers = rs['headers']
         rows = rs['rowSet']

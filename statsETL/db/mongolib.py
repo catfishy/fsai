@@ -102,7 +102,7 @@ class MongoConn:
 nba_conn = MongoConn(db=NBA_DB)
 
 # old
-team_collection = nba_conn.getCollection("teams")
+
 upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
 espn_depth_collection = nba_conn.getCollection("depthcharts")
 advanced_collection = nba_conn.getCollection("advanced")
@@ -120,6 +120,7 @@ team_game_collection = nba_conn.getCollection("team_games")
 '''
 
 # current
+nba_teams_collection = nba_conn.getCollection("nba_teams")
 shot_chart_collection = nba_conn.getCollection("shot_chart")
 shot_collection = nba_conn.getCollection("shot")
 defense_collection = nba_conn.getCollection("defense")
@@ -127,9 +128,12 @@ rebound_collection = nba_conn.getCollection("rebound")
 pass_collection = nba_conn.getCollection("pass")
 nba_games_collection = nba_conn.getCollection("nba_games")
 nba_players_collection = nba_conn.getCollection("nba_players")
+nba_season_averages_collection = nba_conn.getCollection("nba_season_averages")
+nba_team_vectors_collection = nba_conn.getCollection("nba_team_vectors")
+
 
 # ensure indices
-nba_conn.ensureIndex(team_collection, [("url", 1)])
+#nba_conn.ensureIndex(team_collection, [("url", 1)])
 #nba_conn.ensureIndex(player_collection, [("url", 1)])
 #nba_conn.ensureIndex(player_collection, [("nba_id", 1)])
 #nba_conn.ensureIndex(team_game_collection, [("team_id", 1)])
@@ -141,16 +145,21 @@ nba_conn.ensureIndex(team_collection, [("url", 1)])
 #nba_conn.ensureIndex(player_game_collection, [("player_id", 1),("game_id", 1)], unique=True)
 #nba_conn.ensureIndex(espn_stat_collection, [('time', 1)], unique=True)
 #nba_conn.ensureIndex(espn_player_stat_collection, [("player_id", 1),('time', 1)], unique=True)
+nba_conn.ensureIndex(nba_teams_collection, [("team_id", 1),("season", 1)], unique=True)
 nba_conn.ensureIndex(espn_depth_collection, [('time', 1)], unique=True)
 nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
 nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
 nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)
 nba_conn.ensureIndex(shot_chart_collection, [("player_id", 1),("game_id", 1),("time", 1)], unique=True)
+nba_conn.ensureIndex(shot_chart_collection, [("game_id", 1)])
 nba_conn.ensureIndex(shot_collection, [("player_id", 1),("game_id", 1),("time", 1)], unique=True)
+nba_conn.ensureIndex(shot_collection, [("game_id", 1)])
 nba_conn.ensureIndex(defense_collection, [("player_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(rebound_collection, [("player_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(pass_collection, [("player_id", 1),("year", 1)], unique=True)
-nba_conn.ensureIndex(nba_games_collection, [("date", 1)])
+nba_conn.ensureIndex(nba_games_collection, [("date", 1),("teams", 1)], unique=True)
+nba_conn.ensureIndex(nba_season_averages_collection, [("date", 1), ("team_id", 1)], unique=True)
+nba_conn.ensureIndex(nba_team_vectors_collection, [("date", 1), ("team_id", 1)], unique=True)
 
 def getGameData(game_id):
     row = espn_games_collection.find_one({"_id": game_id})
