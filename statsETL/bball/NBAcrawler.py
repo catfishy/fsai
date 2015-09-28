@@ -96,6 +96,27 @@ def crawlNBAGames(date_start,date_end):
     pool.close()
     pool.join()
 
+def updateGameData(url, data):
+    print url
+    newdata = turnJSONtoPD(url)
+    for k,v in newdata.iteritems():
+        if k not in data or data[k].empty:
+            data[k] = v
+        else:
+            # merge
+            if 'PLAYER_ID' in v:
+                cols_to_use = (v.columns-data[k].columns).tolist()
+                cols_to_use.append('PLAYER_ID')
+                data[k] = pd.merge(data[k], v[cols_to_use], on='PLAYER_ID')
+                print "merged into %s" % k
+            elif 'TEAM_ID' in v:
+                cols_to_use = (v.columns-data[k].columns).tolist()
+                cols_to_use.append('TEAM_ID')
+                data[k] = pd.merge(data[k], v[cols_to_use], on='TEAM_ID') 
+                print "merged into %s" % k
+            else:
+                print "no merge match: %s, %s" % (k,v.columns) 
+    return data
 
 def crawlNBAGameData(args):
     print "crawling %s" % (args,)
@@ -126,52 +147,28 @@ def crawlNBAGameData(args):
     all_results = {}
     # get summary stats
     url = url_template_summary % game_id
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
     # get traditional stats
     url = url_template_traditional % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
     # get advanced stats
     url = url_template_advanced % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results) 
     # get misc stats
     url = url_template_misc % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
     # get usage stats
     url = url_template_usage % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
     # get fourfactors stats
     url = url_template_fourfactors % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
     # get tracking stats
     url = url_template_tracking % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
     # get scoring stats
     url = url_template_scoring % (game_id, season)
-    data = turnJSONtoPD(url)
-    for k,v in data.iteritems():
-        if k not in all_results or all_results[k].empty:
-            all_results[k] = v
+    all_results = updateGameData(url, all_results)
 
     # validate stats (if invalid, warn and continue)
     player_stat_shape = all_results["PlayerStats"]
@@ -906,18 +903,20 @@ if __name__=="__main__":
     '''
 
     '''
-    args = (u'0010700035', datetime(2007, 10, 13, 0, 0), u'2007')
+    args = (u'0021400585', datetime(2015, 1, 15, 0, 0), u'2014')
     crawlNBAGameData(args)
     sys.exit(1)
     '''
 
-    '''
+    
     # get games (+ players + teams)
-    crawlNBAGames('10/01/2012','10/01/2015')
-    '''
+    crawlNBAGames('10/01/2014','10/01/2015')
+    
 
+    '''
     # get player data
     crawlNBAPlayerData()
+    '''
 
     '''
     # get rosters

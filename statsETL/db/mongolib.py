@@ -130,6 +130,10 @@ nba_games_collection = nba_conn.getCollection("nba_games")
 nba_players_collection = nba_conn.getCollection("nba_players")
 nba_season_averages_collection = nba_conn.getCollection("nba_season_averages")
 nba_team_vectors_collection = nba_conn.getCollection("nba_team_vectors")
+nba_player_vectors_collection = nba_conn.getCollection("nba_player_vectors")
+nba_against_vectors_collection = nba_conn.getCollection("nba_against_vectors")
+nba_split_vectors_collection = nba_conn.getCollection("nba_split_vectors")
+
 
 
 # ensure indices
@@ -158,8 +162,10 @@ nba_conn.ensureIndex(defense_collection, [("player_id", 1),("year", 1)], unique=
 nba_conn.ensureIndex(rebound_collection, [("player_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(pass_collection, [("player_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(nba_games_collection, [("date", 1),("teams", 1)], unique=True)
-nba_conn.ensureIndex(nba_season_averages_collection, [("date", 1), ("team_id", 1)], unique=True)
-nba_conn.ensureIndex(nba_team_vectors_collection, [("date", 1), ("team_id", 1)], unique=True)
+nba_conn.ensureIndex(nba_season_averages_collection, [("date", 1), ("team_id", 1), ("window", 1)], unique=True)
+nba_conn.ensureIndex(nba_player_vectors_collection, [("date", 1), ("player_id", 1), ("window", 1)], unique=True)
+nba_conn.ensureIndex(nba_against_vectors_collection, [("game_id", 1), ("team_id", 1)], unique=True)
+nba_conn.ensureIndex(nba_split_vectors_collection, [("date", 1), ("player_id", 1)], unique=True)
 
 def getGameData(game_id):
     row = espn_games_collection.find_one({"_id": game_id})
