@@ -56,9 +56,13 @@ def turnJSONtoPD(url):
 
 def getAllLinks(url):
     init_response = requests.get(url, timeout=10)
-    init_content = init_response.content
-    init_soup = BeautifulSoup(init_content)
-    links = [_ for _ in init_soup.findAll('a')]
+    if init_response.history:
+        print "Redirected"
+        links = [str(init_response.url)]
+    else:
+        init_content = init_response.content
+        init_soup = BeautifulSoup(init_content)
+        links = [_ for _ in init_soup.findAll('a')]
     return links
 
 

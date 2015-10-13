@@ -162,9 +162,10 @@ nba_conn.ensureIndex(defense_collection, [("player_id", 1),("year", 1)], unique=
 nba_conn.ensureIndex(rebound_collection, [("player_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(pass_collection, [("player_id", 1),("year", 1)], unique=True)
 nba_conn.ensureIndex(nba_games_collection, [("date", 1),("teams", 1)], unique=True)
+nba_conn.ensureIndex(nba_games_collection, [("date", 1),("players", 1)])
 nba_conn.ensureIndex(nba_season_averages_collection, [("date", 1), ("team_id", 1), ("window", 1)], unique=True)
-nba_conn.ensureIndex(nba_player_vectors_collection, [("date", 1), ("player_id", 1), ("window", 1)], unique=True)
-nba_conn.ensureIndex(nba_against_vectors_collection, [("game_id", 1), ("team_id", 1)], unique=True)
+nba_conn.ensureIndex(nba_player_vectors_collection, [("date", 1), ("player_id", 1), ("game_id",1), ("team_id",1), ("window", 1)], unique=True)
+nba_conn.ensureIndex(nba_against_vectors_collection, [("game_id", 1), ("team_id", 1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_split_vectors_collection, [("date", 1), ("player_id", 1)], unique=True)
 
 def getGameData(game_id):

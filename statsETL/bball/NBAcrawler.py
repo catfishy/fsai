@@ -19,6 +19,81 @@ from statsETL.bball.BRcrawler import crawlBRPlayer
 years_back=[2009,2010,2011,2012,2013,2014,2015]
 
 
+def crawlBRPlayerPosition(pid, player_name):
+    player_name_parts = [_.lower().replace('.','').strip() for _ in player_name.split(' ')]
+    if player_name_parts[-1] == 'jr':
+        player_name_parts = player_name_parts[:-1]
+    player_search = '+'.join(player_name_parts)
+    url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
+    print url
+    links = getAllLinks(url)
+
+    url_pattern = re.compile("/players/[a-z]/[a-z]+[0-9]+\.html")
+    results = []
+    valid_links = False
+    for l in links:
+        if not isinstance(l, str):
+            url = "http://www.basketball-reference.com" + l['href']
+        else:
+            url = l
+        result = url_pattern.search(url)
+        if result:
+            valid_links = True
+            # crawl for position
+            print url
+            response = requests.get(url)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content)
+                possible_tags = soup.find_all("span", class_='bold_text')
+                for pt in possible_tags:
+                    if not pt.string:
+                        continue
+                    text = pt.string.strip().lower().replace(':','')
+                    if text == 'position':
+                        text = pt.next_sibling.strip().lower()
+                        text = text.replace(u"\xa0\u25aa", u' ').strip()
+                        text = text.replace("c/forward", 'c and pf')
+                        text = text.replace("c/sf", 'c and sf')
+                        text = text.replace("pf/guard", "pf and sg and pg")
+                        text = text.replace("guard/forward", 'sg and sf')
+                        text = text.replace('small forward','sf')
+                        text = text.replace('power forward','pf')
+                        text = text.replace('forward', 'sf and pf')
+                        text = text.replace('shooting guard','sg')
+                        text = text.replace('point guard','pg')
+                        text = text.replace('center','c')
+                        if 'and' in text:
+                            text = [x.strip().upper() for x in text.split('and') if x.strip()]
+                        else:
+                            text = [text.upper()]
+                        pos = text
+                    elif text == 'born':
+                        birth_span = soup(id="necro-birth")[0]
+                        text = birth_span['data-birth']
+                        ymd = [int(x.strip()) for x in text.split('-')]
+                        birth = datetime(year=ymd[0],month=ymd[1],day=ymd[2])
+                if birth and pos:
+                    results.append((birth, pos))
+    if not valid_links:
+        print "Unable to crawl BR Player %s: %s, no valid links" % (pid, player_name)
+    elif not results:
+        print "Unable to crawl BR Player %s: %s" % (pid, player_name)
+    return results
+
+def crawlPlayerRotowire(pid):
+    # TODO: WHAT DOES THE NUMBER IN THE URL SIGNIFY? 
+    url = "http://stats.nba.com/feeds/RotoWirePlayers-583598/%s.json"
+    wires = []
+    try:
+        response = requests.get(url)
+        response = response.json()
+        print response
+        wires = sorted(response['PlayerRotowires'], key=lambda x: int(x['Date']), reverse=True)
+    except Exception as e:
+        print "Player Rotowire Exception: %s" % e
+    return wires
+
+
 def crawlUpcomingGames(days_ahead=7):
     new_games = []
     for i in range(days_ahead):
@@ -35,25 +110,27 @@ def crawlUpcomingGames(days_ahead=7):
             season = g['SEASON']
             home_id = g['HOME_TEAM_ID']
             visitor_id = g['VISITOR_TEAM_ID']
-            gamecode = g['GAMECODE']
-            idstr, teamstr = gamecode.split('/')
-            team1_abbrev = teamstr[:3]
-            team2_abbrev = teamstr[3:]
+            summary = {}
+            summary['HOME_TEAM_ID'] = home_id
+            summary['VISITOR_TEAM_ID'] = visitor_id
+            inactives = []
+            players = []
+            depth = {}
+            # TODO: get depth chart
+            # TODO: get roster
             data = {'_id': gid,
                     'season': season,
                     'date': date,
-                    'nba_home_id': home_id,
-                    'nba_visitor_id': visitor_id,
-                    'teams': sorted([team1_abbrev, team2_abbrev])}
+                    'players': players,
+                    'depth': depth,
+                    'InactivePlayers': inactives,
+                    'teams': sorted([home_id, visitor_id]),
+                    'GameSummary': df.DataFrame(summary)}
             try:
-                nba_conn.saveDocument(upcoming_game_collection, data)
+                nba_conn.saveDocument(nba_games_collection, data)
             except DuplicateKeyError as e:
                 pass
-
-        '''
-        gl_crawl = upcomingGameCrawler(date=d)
-        new_games = gl_crawl.crawlPage()
-        '''
+            new_games.append(gid)
     return new_games
 
 def updateNBARosterURLS(roster_urls):
@@ -63,7 +140,6 @@ def updateNBARosterURLS(roster_urls):
 def saveNBADepthChart():
     dcrawl = depthCrawler()
     dcrawl.run()
-
 
 def crawlNBAGames(date_start,date_end):
     date_start = datetime.strptime(date_start, '%m/%d/%Y')
@@ -201,6 +277,7 @@ def crawlNBAGameData(args):
     all_results['_id'] = game_id
     all_results['season'] = season
     all_results['teams'] = list(teams.values)
+    all_results['players'] = list(players)
     all_results['date'] = date
     try:
         nba_conn.updateDocument(nba_games_collection, game_id, all_results, upsert=True)
@@ -298,12 +375,53 @@ def crawlNBAPlayer(pid):
         return False
     try:
         player_data = dict(info.iloc[0])
-        pid = player_data.pop("PERSON_ID")
+        pid = int(player_data.pop("PERSON_ID"))
+        player_data['BR_POSITION'] = []
+
+        # crawl rotowires
+        '''
+        wires = crawlPlayerRotowire(pid)
+        player_data['wires'] = wires
+        '''
+
+        # crawl BR position
+        player_name = player_data["DISPLAY_FIRST_LAST"].strip()
+        birthday = player_data["BIRTHDATE"].strip()
+        if birthday != "":
+            birthday = dateutil.parser.parse(birthday)
+            results = crawlBRPlayerPosition(pid, player_name)
+            matched = False
+
+            # if birthday is 1/1/1900, clearly an error, and take first result if there is only one result
+            if birthday == datetime(year=1900,month=1,day=1) and len(results) == 1:
+                print "BAD BIRTHDAY FOR %s: %s, setting to only result" % (player_name, birthday)
+                bd, pos = results.pop(0)
+                player_data['BR_POSITION'] = pos
+
+            # try to match birthdays
+            for bd, pos in results:
+                possible_error = bd
+                possible_error_2 = datetime(year=birthday.year, month=bd.month, day=bd.day)
+                try:
+                    possible_error = datetime(year=bd.year, month=bd.day, day=bd.month) # sometimes month and day flipped
+                except Exception as e:
+                    pass
+                if abs(bd - birthday).days <= 120 or birthday == possible_error or birthday == possible_error_2:
+                    print "Found BR Position for %s: %s" % (player_name, pos)
+                    player_data['BR_POSITION'] = pos
+                    matched = True
+                    break
+
+            if len(results) > 0 and not matched:
+                print "Found BR results, but birthday doesn't match for %s, %s: %s vs %s" % (pid, player_name, birthday, results)
+        else:
+            print "No BD for %s, can't crawl BR" % (pid)
+
         nba_conn.updateDocument(nba_players_collection, pid, player_data, upsert=True)
         return True
     except Exception as e:
-        print "Could not save nba player %s" % pid
-        pass
+        print "Could not save nba player %s: %s" % (pid, e)
+        print traceback.print_exc()
     return False
 
 def createSeasonKey(yr):
@@ -889,6 +1007,17 @@ class upcomingGameCrawler(Crawler):
 
 if __name__=="__main__":
 
+
+    '''
+    # explicitly crawl players
+    pool = mp.Pool(processes=4)
+    def streamPID():
+        for p in nba_players_collection.find({"POSITION": ""}):
+            yield p['_id']
+    for i, _ in enumerate(pool.imap_unordered(crawlNBAPlayer, streamPID(), 1)):
+        pass
+    '''
+
     # crawl upcoming games
     '''
     today = datetime.now() + timedelta(int(1))
@@ -910,7 +1039,7 @@ if __name__=="__main__":
 
     
     # get games (+ players + teams)
-    crawlNBAGames('10/01/2014','10/01/2015')
+    crawlNBAGames('10/01/2007','10/01/2015')
     
 
     '''
