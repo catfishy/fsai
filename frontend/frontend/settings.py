@@ -36,9 +36,12 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_extensions',
     'rest_framework',
     'compressor',
-    'authentication'
+    'authentication',
+    'posts',
+    'nba_stats',
 )
 
 MIDDLEWARE_CLASSES = (
@@ -88,6 +91,7 @@ STATIC_URL = '/static/'
 STATIC_ROOT = 'staticfiles'
 
 STATICFILES_DIRS = (
+    BASE_DIR,
     os.path.join(BASE_DIR, 'static'),
 )
 

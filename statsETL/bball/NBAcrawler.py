@@ -55,12 +55,14 @@ def crawlBRPlayerPosition(pid, player_name):
                         text = text.replace("c/forward", 'c and pf')
                         text = text.replace("c/sf", 'c and sf')
                         text = text.replace("pf/guard", "pf and sg and pg")
+                        text = text.replace("pf/c", "pf and c")
                         text = text.replace("guard/forward", 'sg and sf')
                         text = text.replace('small forward','sf')
                         text = text.replace('power forward','pf')
                         text = text.replace('forward', 'sf and pf')
                         text = text.replace('shooting guard','sg')
                         text = text.replace('point guard','pg')
+                        text = text.replace('guard','pg and sg')
                         text = text.replace('center','c')
                         if 'and' in text:
                             text = [x.strip().upper() for x in text.split('and') if x.strip()]
@@ -272,17 +274,22 @@ def crawlNBAGameData(args):
             # OK if we fail (there are some foreign games, e.g. Moscow CSKA games)
             print e
 
+    # create player team lookup for this game
+    player_team_lookup = {str(row['PLAYER_ID']):row['TEAM_ID'] for i,row in all_results['PlayerStats'].iterrows()}
+
     # save it
     all_results = {k: v.to_json() for k,v in all_results.iteritems()}
     all_results['_id'] = game_id
     all_results['season'] = season
     all_results['teams'] = list(teams.values)
     all_results['players'] = list(players)
+    all_results['player_teams'] = player_team_lookup
     all_results['date'] = date
     try:
         nba_conn.updateDocument(nba_games_collection, game_id, all_results, upsert=True)
     except DuplicateKeyError as e:
-        pass
+        print "Why duplicate key error when updating???"
+
     return game_id
 
 def findNBAPlayer(pid, crawl=True):
@@ -1039,7 +1046,7 @@ if __name__=="__main__":
 
     
     # get games (+ players + teams)
-    crawlNBAGames('10/01/2007','10/01/2015')
+    crawlNBAGames('10/01/2015','11/01/2015')
     
 
     '''

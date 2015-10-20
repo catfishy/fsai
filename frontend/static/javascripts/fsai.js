@@ -5,7 +5,11 @@
         .module('fsai', [
           'fsai.routes',
           'fsai.authentication',
-          'fsai.config'
+          'fsai.config',
+          'fsai.layout',
+          'fsai.posts',
+          'fsai.utils',
+          'fsai.profiles'
         ]);
 
     angular
@@ -13,6 +17,21 @@
 
     angular
         .module('fsai.config', []);
+
+    angular
+        .module('fsai')
+        .run(run);
+
+    run.$inject = ['$http'];
+
+    /**
+    * @name run
+    * @desc Update xsrf $http headers to align with Django's defaults
+    */
+    function run($http) {
+      $http.defaults.xsrfHeaderName = 'X-CSRFToken';
+      $http.defaults.xsrfCookieName = 'csrftoken';
+    }
 
 
 })();

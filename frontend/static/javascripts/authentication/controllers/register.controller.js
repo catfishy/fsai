@@ -16,9 +16,22 @@
   */
   function RegisterController($location, $scope, Authentication) {
     var vm = this;
-
     vm.register = register;
 
+    activate();
+
+    /**
+    * @name activate
+    * @desc Actions to be performed when this controller is instantiated
+    * @memberOf fsai.authentication.controllers.LoginController
+    */
+    function activate() {
+      // If the user is authenticated, they should not be here.
+      if (Authentication.isAuthenticated()) {
+        $location.url('/');
+      }
+    }
+    
     /**
     * @name register
     * @desc Register a new user
@@ -27,5 +40,6 @@
     function register() {
       Authentication.register(vm.email, vm.password, vm.username);
     }
+
   }
 })();

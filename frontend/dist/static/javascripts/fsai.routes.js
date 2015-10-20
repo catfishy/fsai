@@ -1,0 +1,1 @@
+!function(){"use strict";function t(t){t.when("/register",{controller:"RegisterController",controllerAs:"vm",templateUrl:"/static/templates/authentication/register.html"}).otherwise("/")}angular.module("fsai.routes").config(t),t.$inject=["$routeProvider"]}();

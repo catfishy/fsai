@@ -20,46 +20,52 @@ from scipy.spatial import distance
 import matplotlib.pyplot as plt
 
 from statsETL.db.mongolib import *
-from statsETL.db.cachelib import *
+
+WINDOW = 10 # TODO: LET THIS BE VARIED
 
 
-WINDOW = 10
+def getGamesForDay(date):
+    date = datetime(day=date.day, month=date.month, year=date.year)
+    query = {"date" : {"$gte" : date, "$lte": date+timedelta(days=1)}}
+    games = nba_games_collection.find(query)
+    return games
 
+def getTeamsForDay(date):
+    games = getGamesForDay(date)
+    args = []
+    for g in games:
+        gid = g['_id']
+        for tid in g['teams']:
+            args.append((int(tid), gid))
+    return args
 
-def getPlayerVector(pid, tid, gid):
-    key = (pid, tid, gid)
+def getPlayersForDay(date):
+    games = getGamesForDay(date)
+    args = []
+    for g in games:
+        gid = g['_id']
+        for pid, tid in g['player_teams'].iteritems():
+            args.append((int(pid), int(tid), gid))
+    return args
 
-    if not recalculate:
-        result = findKey(key)
-        if result:
-            return result
+def getPlayerVector(pid, tid, gid, recalculate=False, window=None):
+    if not window:
+        window = WINDOW
 
     vector = playerFeatureVector(
-        pid, tid, gid, window=WINDOW, recalculate=recalculate)
+        pid, tid, gid, window=window, recalculate=recalculate)
     result = vector.input
-
-    # Place in cache
-    if recalculate:
-        updated = updateCache(key, result)
 
     return result
 
 
-def getTeamVector(tid, gid, recalculate=False):
-    key = (tid, gid)
-
-    if not recalculate:
-        result = findKey(key)
-        if result:
-            return result
+def getTeamVector(tid, gid, recalculate=False, window=None):
+    if not window:
+        window = WINDOW
 
     vector = teamFeatureVector(
-        tid, gid, window=WINDOW, recalculate=recalculate)
+        tid, gid, window=window, recalculate=recalculate)
     result = vector.input
-
-    # Place in cache
-    if recalculate:
-        updated = updateCache(key, result)
 
     return result
 
@@ -312,7 +318,7 @@ class teamFeatureVector(featureVector):
 
     def __init__(self, tid, gid, window=10, recalculate=False):
         self.tid=int(tid)
-        self.gid=str(gid)
+        self.gid=str(gid).zfill(10)
         self.window=int(window)
 
         # find the game
@@ -625,7 +631,7 @@ class playerFeatureVector(featureVector):
 
     def __init__(self, pid, tid, gid, window=10, recalculate=False):
         self.pid=int(pid)
-        self.gid=str(gid)
+        self.gid=str(gid).zfill(10)
         self.tid=int(tid)
         self.window=int(window)
         self.long_window=self.window * 2
@@ -1106,6 +1112,13 @@ class playerFeatureVector(featureVector):
 
 
 if __name__ == '__main__':
+
+    date = datetime(year=2015,month=1,day=15)
+    print getTeamsForDay(date)
+    print getPlayersForDay(date)
+    sys.exit(1)
+
+
     '''
     gid="0021400585"
     tid="1610612749"
