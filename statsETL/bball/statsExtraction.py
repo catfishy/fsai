@@ -323,9 +323,6 @@ class teamFeatureVector(featureVector):
 
         # find the game
         self.game_row=self.getGameRow(self.gid)
-
-        # get invalids, game info
-        self.invalids=self.game_row['InactivePlayers']
         self.gamesummary=self.game_row['GameSummary'].iloc[0]
 
         self.home_team=int(self.gamesummary['HOME_TEAM_ID'])
@@ -477,7 +474,6 @@ class teamFeatureVector(featureVector):
                 df['GAME_DATE']=g['date']
 
                 parsed[k]=df
-
 
         if success:
             return parsed
@@ -636,10 +632,10 @@ class playerFeatureVector(featureVector):
         self.window=int(window)
         self.long_window=self.window * 2
 
-        # get invalids, game info
+        # get game info
         self.game_row=self.getGameRow(self.gid)
-        self.invalids=self.game_row['InactivePlayers']
         self.gamesummary=self.game_row['GameSummary'].iloc[0]
+
         self.home_team=int(self.gamesummary['HOME_TEAM_ID'])
         self.away_team=int(self.gamesummary['VISITOR_TEAM_ID'])
         if self.tid not in set([self.home_team, self.away_team]):
@@ -669,9 +665,8 @@ class playerFeatureVector(featureVector):
         Get the player's position in the specified game
         '''
         if self.output is None:
-            # TODO: specify contingency for future games
-            print "Can't find position in output, going to DB"
-            playerpos=self.getPlayerPosition(pid)
+            print "No output, going to DB"
+            player_pos=self.getPlayerPosition(pid)
         else:
             player_pos=self.output.iloc[0]['START_POSITION'].strip()
             if player_pos == '':
@@ -1101,7 +1096,7 @@ class playerFeatureVector(featureVector):
         '''
         parse game row for player performance (for historical games only)
         '''
-        # parse game row    for outputs
+        # parse game row for outputs
         parsed=self.parseGameRow(self.own_team_vector.game_row)
         if not parsed:
             print "Game Row could not be parsed: possible bad game or future game"

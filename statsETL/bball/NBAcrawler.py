@@ -54,8 +54,8 @@ def crawlBRPlayerPosition(pid, player_name):
                         text = text.replace(u"\xa0\u25aa", u' ').strip()
                         text = text.replace("c/forward", 'c and pf')
                         text = text.replace("c/sf", 'c and sf')
-                        text = text.replace("pf/guard", "pf and sg and pg")
-                        text = text.replace("pf/c", "pf and c")
+                        text = text.replace("pf/guard", "pf and sg")
+                        text = text.replace("forward/center", "pf and c")
                         text = text.replace("guard/forward", 'sg and sf')
                         text = text.replace('small forward','sf')
                         text = text.replace('power forward','pf')
@@ -68,6 +68,7 @@ def crawlBRPlayerPosition(pid, player_name):
                             text = [x.strip().upper() for x in text.split('and') if x.strip()]
                         else:
                             text = [text.upper()]
+                        text = [_ for _ in text if _]
                         pos = text
                     elif text == 'born':
                         birth_span = soup(id="necro-birth")[0]
@@ -108,32 +109,62 @@ def crawlUpcomingGames(days_ahead=7):
             print "No games on %s" % date
             continue
         for i, g in games.iterrows():
-            gid = g['GAME_ID']
+            gid = str(g['GAME_ID']).zfill(10)
             season = g['SEASON']
             home_id = g['HOME_TEAM_ID']
             visitor_id = g['VISITOR_TEAM_ID']
+            date = dateutil.parser.parse(g['GAME_DATE_EST'])
+            gamecode = g['GAMECODE']
+            teams = [int(home_id), int(visitor_id)]
+            
+            # generate game summary
             summary = {}
             summary['HOME_TEAM_ID'] = home_id
             summary['VISITOR_TEAM_ID'] = visitor_id
-            inactives = []
-            players = []
-            depth = {}
-            # TODO: get depth chart
-            # TODO: get roster
+            summary['GAMECODE'] = gamecode
+
+            # get rosters, inactives, starters
+            rosters = {tid: crawlCurrentRoster(tid) for tid in teams}
+            inactives = [{"PLAYER_ID": int(pid), "TEAM_ID": int(tid)} for tid,v in rosters.iteritems() for pid in v['inactives']]
+            players = [pid for tid,v in rosters.iteritems() for pid in v['roster']]
+            player_teams = {str(pid):int(tid) for tid,v in rosters.iteritems() for pid in v['roster']}
+
+            # generate barebones 'PlayerStats' from rosters
+            playerstats = []
+            for pid, tid in player_teams.iteritems():
+                statrow = {"PLAYER_ID": int(pid),
+                           "TEAM_ID": int(tid),
+                           "GAME_ID": gid,
+                           "START_POSITION": ''}
+                if int(pid) in rosters[tid]['starters'].keys():
+                    statrow['START_POSITION'] = rosters[tid]['starters'][int(pid)]
+                playerstats.append(statrow)
+
             data = {'_id': gid,
                     'season': season,
                     'date': date,
                     'players': players,
-                    'depth': depth,
-                    'InactivePlayers': inactives,
+                    'teams': teams,
+                    'team_players': player_teams,
                     'teams': sorted([home_id, visitor_id]),
-                    'GameSummary': df.DataFrame(summary)}
+                    'InactivePlayers': pd.DataFrame(inactives).to_json(),
+                    'GameSummary': pd.DataFrame([summary]).to_json(),
+                    'PlayerStats': pd.DataFrame(playerstats).to_json()}
+
             try:
                 nba_conn.saveDocument(nba_games_collection, data)
             except DuplicateKeyError as e:
-                pass
+                print "UPCOMING GAME %s already saved" % gid
+
             new_games.append(gid)
     return new_games
+
+def crawlCurrentRoster(tid):
+    data = {'roster': [],
+            'starters': {},
+            'inactives': []}
+    return data
+
 
 def updateNBARosterURLS(roster_urls):
     rcrawl = rosterCrawler(roster_urls)
@@ -394,35 +425,38 @@ def crawlNBAPlayer(pid):
         # crawl BR position
         player_name = player_data["DISPLAY_FIRST_LAST"].strip()
         birthday = player_data["BIRTHDATE"].strip()
-        if birthday != "":
-            birthday = dateutil.parser.parse(birthday)
-            results = crawlBRPlayerPosition(pid, player_name)
-            matched = False
+        try:
+            if birthday != "":
+                birthday = dateutil.parser.parse(birthday)
+                results = crawlBRPlayerPosition(pid, player_name)
+                matched = False
 
-            # if birthday is 1/1/1900, clearly an error, and take first result if there is only one result
-            if birthday == datetime(year=1900,month=1,day=1) and len(results) == 1:
-                print "BAD BIRTHDAY FOR %s: %s, setting to only result" % (player_name, birthday)
-                bd, pos = results.pop(0)
-                player_data['BR_POSITION'] = pos
-
-            # try to match birthdays
-            for bd, pos in results:
-                possible_error = bd
-                possible_error_2 = datetime(year=birthday.year, month=bd.month, day=bd.day)
-                try:
-                    possible_error = datetime(year=bd.year, month=bd.day, day=bd.month) # sometimes month and day flipped
-                except Exception as e:
-                    pass
-                if abs(bd - birthday).days <= 120 or birthday == possible_error or birthday == possible_error_2:
-                    print "Found BR Position for %s: %s" % (player_name, pos)
+                # if birthday is 1/1/1900, clearly an error, and take first result if there is only one result
+                if birthday == datetime(year=1900,month=1,day=1) and len(results) == 1:
+                    print "BAD BIRTHDAY FOR %s: %s, setting to only result" % (player_name, birthday)
+                    bd, pos = results.pop(0)
                     player_data['BR_POSITION'] = pos
-                    matched = True
-                    break
 
-            if len(results) > 0 and not matched:
-                print "Found BR results, but birthday doesn't match for %s, %s: %s vs %s" % (pid, player_name, birthday, results)
-        else:
-            print "No BD for %s, can't crawl BR" % (pid)
+                # try to match birthdays
+                for bd, pos in results:
+                    possible_error = bd
+                    possible_error_2 = datetime(year=birthday.year, month=bd.month, day=bd.day)
+                    try:
+                        possible_error = datetime(year=bd.year, month=bd.day, day=bd.month) # sometimes month and day flipped
+                    except Exception as e:
+                        pass
+                    if abs(bd - birthday).days <= 120 or birthday == possible_error or birthday == possible_error_2:
+                        print "Found BR Position for %s: %s" % (player_name, pos)
+                        player_data['BR_POSITION'] = pos
+                        matched = True
+                        break
+
+                if len(results) > 0 and not matched:
+                    print "Found BR results, but birthday doesn't match for %s, %s: %s vs %s" % (pid, player_name, birthday, results)
+            else:
+                print "No BD for %s, can't crawl BR" % (pid)
+        except Exception as e:
+            print "BR PLAYER CRAWLING FAILED FOR %s, %s" % (pid, player_name)
 
         nba_conn.updateDocument(nba_players_collection, pid, player_data, upsert=True)
         return True
@@ -617,6 +651,7 @@ def crawlNBAPass(PID, year):
         pass
     return data
 
+'''
 def crawlNBATrackingStats():
     pullup_address = ("pullup", "http://stats.nba.com/js/data/sportvu/pullUpShootData.js")
     drives_address = ("drives", "http://stats.nba.com/js/data/sportvu/drivesData.js")
@@ -673,7 +708,7 @@ def crawlNBATrackingStats():
         except DuplicateKeyError as e:
             print "%s espn player stats already saved" % today
 
-'''
+
 def translatePlayerNames(player_list, player_birthdays=None):
     logname = 'player_translation_problems.txt'
 
@@ -905,6 +940,7 @@ class rosterCrawler(Crawler):
             team_collection.save(team_row)
             self.logger.info("Saved %s roster: %s" % (name, player_ids))
 
+'''
 class upcomingGameCrawler(Crawler):
 
     INIT_PAGE = "http://www.nba.com/gameline/"
@@ -1011,6 +1047,8 @@ class upcomingGameCrawler(Crawler):
         minute = int(hourminute[1])
         gametime = datetime(year=self.date.year, month=self.date.month, day=self.date.day, hour=hour, minute=minute)
         return gametime
+'''
+
 
 if __name__=="__main__":
 

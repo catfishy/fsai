@@ -10,7 +10,7 @@ RECALCULATE=False
 WINDOW=10
 
 def yieldTeamGames():
-    games = nba_games_collection.find({})
+    games = nba_games_collection.find(no_cursor_timeout=True)
     for g in games:
         gid = g['_id']
         teams = g['teams']
@@ -22,7 +22,7 @@ def yieldTeamGames():
 
 
 def yieldPlayerGames():
-    games = nba_games_collection.find({})
+    games = nba_games_collection.find(no_cursor_timeout=True)
     for g in games:
         gid = g['_id']
         player_teams = g['player_teams']

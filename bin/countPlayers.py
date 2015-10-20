@@ -33,7 +33,8 @@ for p in players:
         data['br_pos'] += 1
         found = True
     else:
-        crawlNBAPlayer(p['_id'])
+        pass
+        #crawlNBAPlayer(p['_id'])
     if len(p['POSITION']) > 0:
         data['pos'] += 1
         found = True
