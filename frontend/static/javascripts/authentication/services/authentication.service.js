@@ -6,7 +6,7 @@
   'use strict';
 
   angular
-    .module('fsai.authentication.service')
+    .module('fsai.authentication.services')
     .factory('Authentication', Authentication);
 
   Authentication.$inject = ['$cookies', '$http'];

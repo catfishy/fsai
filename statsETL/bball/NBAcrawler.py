@@ -165,7 +165,7 @@ def crawlCurrentRoster(tid):
             'inactives': []}
     return data
 
-
+'''
 def updateNBARosterURLS(roster_urls):
     rcrawl = rosterCrawler(roster_urls)
     rcrawl.run()
@@ -173,6 +173,7 @@ def updateNBARosterURLS(roster_urls):
 def saveNBADepthChart():
     dcrawl = depthCrawler()
     dcrawl.run()
+'''
 
 def crawlNBAGames(date_start,date_end):
     date_start = datetime.strptime(date_start, '%m/%d/%Y')
@@ -473,24 +474,43 @@ def createSeasonKey(yr):
     Season = "%s-%s" % (season_start.strftime("%Y"), season_end.strftime("%y"))
     return Season
 
-def crawlNBAPlayerData():
+def crawlNBAPlayerData(years=None, last_n_days=None):
+    if years is None:
+        years=years_back
     pool = mp.Pool(processes=8)
     def args():
-        players = nba_players_collection.find({})
+        if last_n_games is None:
+            players = nba_players_collection.find(no_cursor_timeout=True)
+        else:
+            # find players who played in last n days
+            start_date = datetime.now() - timedelta(days=last_n_days)
+            game_query = {"date": {"$gte": start_date}}
+            games = nba_games_collection.find(game_query)
+            players = []
+            for g in games:
+                g_players = g['players']
+                players += players
+            players = map(int,list(set(players)))
         for p in players:
-            player_id = p['_id']
+            if isinstance(p,int):
+                player_id = p
+            else:
+                player_id = p['_id']
+            '''
             fromyr = p['FROM_YEAR']
             toyr = p['TO_YEAR']
             if fromyr is None or toyr is None:
                 print "Can't determine player year range"
                 continue
-                #valid_years = active_years
             fromyr  = int(fromyr)
             toyr = int(toyr)
             active_years = range(fromyr, toyr+1)
-            valid_years = sorted(list(set(active_years) & set(years_back)))
-            for yr in valid_years:
-                yield (player_id, yr)
+            valid_years = list(set(active_years) & set(years))
+            '''
+            for yr in years:
+                args = (player_id, yr)
+                print args
+                yield args
     for i, _ in enumerate(pool.imap_unordered(runPlayerCrawlFunctions, args()), 1): 
         pass
     pool.close()
@@ -810,7 +830,7 @@ def createTeamRegex(raw_string):
         query += '.*'
     return re.compile(query)
 
-
+'''
 class depthCrawler(Crawler):
 
     INIT_PAGE = "http://espn.go.com/nba/depth/_/type/print"
@@ -940,7 +960,7 @@ class rosterCrawler(Crawler):
             team_collection.save(team_row)
             self.logger.info("Saved %s roster: %s" % (name, player_ids))
 
-'''
+
 class upcomingGameCrawler(Crawler):
 
     INIT_PAGE = "http://www.nba.com/gameline/"

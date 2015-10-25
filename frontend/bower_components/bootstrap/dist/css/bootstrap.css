@@ -2526,6 +2526,9 @@ input[type="checkbox"] {
 input[type="file"] {
   display: block;
 }
+input[type="date"] {
+  display: inline-block;
+}
 input[type="range"] {
   display: block;
   width: 100%;

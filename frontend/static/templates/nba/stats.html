@@ -1,0 +1,39 @@
+<div class="container-fluid" id="nba_stats">
+  <form role="form" class="form-inline" ng-submit="vm.populateTeamStats()">
+    <div class="form-group">
+      <label for="nba-stats__startdate">Start Date: </label>
+      <input type="date" class="form-control" id="nbastats__startdate" ng-model="vm.startdate" placeholder="" />
+    </div>
+    <div class="form-group">
+      <label for="nba-stats__enddate">End Date: </label>
+      <input type="date" class="form-control" id="nbastats__enddate" ng-model="vm.enddate" placeholder="" />
+    </div>
+    <div class="form-group">
+      <button type="submit" class="btn btn-primary">Submit</button>
+    </div>
+  </form>
+  <div ng-show="vm.loading">
+    Loading
+  </div>
+  <div ng-hide="vm.loading">
+    <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="table table-striped">
+      <thead>
+        <tr>
+          <th ng-repeat="header in vm.displayed_headers" st-sort="'{{header.key}}'">{{header.name}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr ng-repeat="row in vm.displayed_rows">
+          <td ng-repeat="header in vm.displayed_headers">{{row[header.key]}}</td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5" class="text-center">
+            <div st-pagination="" st-items-by-page="vm.itemsByPage" st-displayed-pages="7"></div>
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div> <!-- /.container-fluid -->

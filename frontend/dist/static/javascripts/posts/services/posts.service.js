@@ -1,0 +1,1 @@
+!function(){"use strict";function t(t){function n(){return t.get("/api/v1/posts/")}function s(n){return t.post("/api/v1/posts/",{content:n})}function e(n){return t.get("/api/v1/accounts/"+n+"/posts/")}var o={all:n,create:s,get:e};return o}angular.module("fsai.posts.services").factory("Posts",t),t.$inject=["$http"]}();

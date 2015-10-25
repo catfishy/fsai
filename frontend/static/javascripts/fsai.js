@@ -3,13 +3,15 @@
 
     angular
         .module('fsai', [
+          'smart-table',
           'fsai.routes',
           'fsai.authentication',
           'fsai.config',
           'fsai.layout',
           'fsai.posts',
           'fsai.utils',
-          'fsai.profiles'
+          'fsai.profiles',
+          'fsai.nba'
         ]);
 
     angular
@@ -21,6 +23,8 @@
     angular
         .module('fsai')
         .run(run);
+
+
 
     run.$inject = ['$http'];
 

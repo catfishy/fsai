@@ -1,0 +1,1 @@
+!function(){"use strict";function t(t,a,e){function n(t,n){return a.get("/api/v1/nba/daily-team-own",{params:{from:e("date")(t,"yyyy-MM-dd"),to:e("date")(n,"yyyy-MM-dd")}})}var r={getTeamStats:n};return r}angular.module("fsai.nba.services").factory("NBAStats",t),t.$inject=["$cookies","$http","$filter"]}();

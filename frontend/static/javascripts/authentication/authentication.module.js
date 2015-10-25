@@ -4,12 +4,12 @@
   angular
     .module('fsai.authentication', [
       'fsai.authentication.controllers',
-      'fsai.authentication.service'
+      'fsai.authentication.services'
     ]);
 
   angular
     .module('fsai.authentication.controllers', []);
 
   angular
-    .module('fsai.authentication.service', ['ngCookies']);
+    .module('fsai.authentication.services', ['ngCookies']);
 })();

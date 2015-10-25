@@ -1,1 +1,1 @@
-!function(){"use strict";function t(t,e,n){function i(){n.register(o.email,o.password,o.username)}var o=this;o.register=i}angular.module("fsai.authentication.controllers").controller("RegisterController",t),t.$inject=["$location","$scope","Authentication"]}();
+!function(){"use strict";function t(t,e,n){function i(){n.isAuthenticated()&&t.url("/")}function o(){n.register(r.email,r.password,r.username)}var r=this;r.register=o,i()}angular.module("fsai.authentication.controllers").controller("RegisterController",t),t.$inject=["$location","$scope","Authentication"]}();

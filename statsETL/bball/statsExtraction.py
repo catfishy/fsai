@@ -18,6 +18,7 @@ import copy
 import numpy as np
 from scipy.spatial import distance
 import matplotlib.pyplot as plt
+from pymongo.helpers import DuplicateKeyError
 
 from statsETL.db.mongolib import *
 
@@ -123,7 +124,6 @@ class featureVector():
                            (u'Above the Break 3', u'Right Side Center(RC)', u'24+ ft.'),
                            (u'Above the Break 3', u'Left Side Center(LC)', u'24+ ft.'),
                            (u'Above the Break 3', u'Back Court(BC)', u'Back Court Shot')]
-        print query
         shots=shot_chart_collection.find(query)
         by_zones_made={_:0 for _ in shot_chart_keys}
         by_zones_attempted={_:0 for _ in shot_chart_keys}
@@ -254,6 +254,8 @@ class featureVector():
         # Generate the indices for the required number of
         # permutations/(resamplings with replacement) required
         data=data.copy()
+        data=data.convert_objects(convert_numeric=True)
+        data=data._get_numeric_data()
         print "Bootstrap: %s, %s" % (statistic, data.shape)
         idx=np.random.randint(0, len(data.index), (num_samples, len(data)))
         stats=[statistic(data.iloc[idx_row]) for idx_row in idx]
@@ -280,6 +282,8 @@ class featureVector():
             return Dirichlet_weights
 
         data=data.copy()
+        data=data.convert_objects(convert_numeric=True)
+        data=data._get_numeric_data()
         print "Bayesian Bootstrap: %s, %s" % (statistic, data.shape)
         # Generate sample of Dirichlet weights
         Dirich_wgts_matrix=Dirichlet_sample(num_samples, data.shape[0])
@@ -332,10 +336,8 @@ class teamFeatureVector(featureVector):
         self.oid=self.home_team if self.away_team == self.tid else self.away_team
 
         # calculate date ranges
-        self.end_date=min(datetime.now(), self.game_row[
-                            'date'] - timedelta(days=1))
-        start_year=self.end_date.year - 1 if (self.end_date < datetime(
-            day=1, month=10, year=self.end_date.year)) else self.end_date.year
+        self.end_date=min(datetime.now(), self.game_row['date'] - timedelta(days=1))
+        start_year=self.end_date.year - 1 if (self.end_date < datetime(day=1, month=10, year=self.end_date.year)) else self.end_date.year
         self.season_start=datetime(day=1, month=10, year=start_year)
 
         # find the team
@@ -391,14 +393,15 @@ class teamFeatureVector(featureVector):
         self.season_stats['vars']=season_vars
 
         # save/update
-        data={'season_stats': self.serialize(copy.deepcopy(
-            self.season_stats)), 'team_id': self.tid, 'date': self.end_date}
-
-        if saved:
-            nba_conn.updateDocument(nba_season_averages_collection, saved[
-                                    '_id'], data, upsert=False)
-        else:
-            nba_conn.saveDocument(nba_season_averages_collection, data)
+        input_to_save = self.serialize(copy.deepcopy(self.season_stats))
+        try:
+            to_save={'season_stats': input_to_save, 
+                  'team_id': self.tid, 
+                  'date': self.end_date}
+            nba_conn.saveDocument(nba_season_averages_collection, to_save)
+        except DuplicateKeyError as e:
+            saved = nba_season_averages_collection.find_one(saved_query)
+            nba_conn.updateDocument(nba_season_averages_collection, saved['_id'], {'season_stats':input_to_save}, upsert=False)
 
     def mergeRows(self, rows, tid):
         merged={}
@@ -408,8 +411,8 @@ class teamFeatureVector(featureVector):
         return merged
 
     def imputeRows(self, row, join_shot_charts=True):
-        col_blacklist=['LEAGUE_ID',
-                       'MIN']
+        col_blacklist=['LEAGUE_ID', 'MIN']
+
         # merge frames
         merged=None
         for k, v in row.iteritems():
@@ -418,7 +421,7 @@ class teamFeatureVector(featureVector):
                     merged=v
                     continue
                 else:
-                    cols_to_use=(v.columns - merged.columns).tolist()
+                    cols_to_use=v.columns.difference(merged.columns).tolist()
                     cols_to_use.append('GAME_ID')
                     merged=pd.merge(merged, v[cols_to_use], on='GAME_ID')
 
@@ -431,13 +434,12 @@ class teamFeatureVector(featureVector):
                 sc_for_game['GAME_ID'] = row['GAME_ID']
                 shot_chart_rows.append(sc_for_game)
             shot_chart_df = pd.DataFrame(shot_chart_rows)
-            cols_to_use = (shot_chart_df.columns-merged.columns).tolist()
+            cols_to_use = shot_chart_df.columns.difference(merged.columns).tolist()
             cols_to_use.append('GAME_ID')
             merged = pd.merge(merged, shot_chart_df[cols_to_use], on='GAME_ID')
 
         if 'MIN' in merged:
-            merged['MIN']=merged['MIN'].fillna(value='0:0').str.split(
-                ':').apply(lambda x: float(x[0]) + float(x[1]) / 60.0)
+            merged['MIN']=merged['MIN'].fillna(value='0:0').str.split(':').apply(lambda x: float(x[0]) + float(x[1]) / 60.0)
 
         # remove blacklist
         for c in col_blacklist:
@@ -557,19 +559,19 @@ class teamFeatureVector(featureVector):
                 print v
         '''
         # save/update
-        data={'input': self.serialize(copy.deepcopy(
-            self.input)), 'team_id': self.tid, 'date': self.end_date, 'window': self.window}
-        if saved:
-            nba_conn.updateDocument(nba_team_vectors_collection, saved[
-                                    '_id'], data, upsert=False)
-        else:
-            nba_conn.saveDocument(nba_team_vectors_collection, data)
+        input_to_save = self.serialize(copy.deepcopy(self.input))
+        try:
+            to_save={'input': input_to_save,'team_id': self.tid,'date': self.end_date,'window': self.window}
+            nba_conn.saveDocument(nba_team_vectors_collection, to_save)
+        except DuplicateKeyError as e:
+            saved = nba_team_vectors_collection.find_one(saved_query)
+            nba_conn.updateDocument(nba_team_vectors_collection, saved['_id'], {'input': input_to_save}, upsert=False)       
 
     def loadOutput(self):
         # parse game row for outputs
         parsed=self.parseGameRow(self.game_row)
         if not parsed:
-            print "Game Row could not be parsed: possible bad game or future game"
+            print "No output, future? (tid %s, gid %s)" % (self.tid, self.gid)
             self.output={}
         else:
             data=self.imputeRows(self.mergeRows([parsed], self.tid))
@@ -578,6 +580,11 @@ class teamFeatureVector(featureVector):
 
 class playerFeatureVector(featureVector):
 
+    '''
+    TODO:
+    - Include pace adjusted stats (have to get # possessions first)
+    '''
+
     PLAYER_FRAMES=['PlayerTrack',
                      'PlayerStats',
                      'sqlPlayersUsage',
@@ -585,45 +592,30 @@ class playerFeatureVector(featureVector):
                      'sqlPlayersFourFactors',
                      'sqlPlayersMisc']
 
-    PER36_KEYS=['AST',
-                  'BLK',
-                  'BLKA',
-                  'CFGA',
-                  'CFGM',
-                  'DFGA',
-                  'DFGM',
-                  'DIST',
-                  'DRBC',
-                  'DREB',
-                  'FG3A',
-                  'FG3M',
-                  'FGA',
-                  'FGM',
-                  'FTA',
-                  'FTAST',
-                  'FTM',
-                  'OPP_PTS_2ND_CHANCE',
-                  'OPP_PTS_FB',
-                  'OPP_PTS_OFF_TOV',
-                  'OPP_PTS_PAINT',
-                  'ORBC',
-                  'OREB',
-                  'PASS',
-                  'PF',
-                  'PFD',
-                  'PTS',
-                  'PTS_2ND_CHANCE',
-                  'PTS_FB',
-                  'PTS_OFF_TOV',
-                  'PTS_PAINT',
-                  'RBC',
-                  'REB',
-                  'SAST',
-                  'STL',
-                  'TCHS',
-                  'TO',
-                  'UFGA',
-                  'UFGM']
+    PER36_KEYS=['AST','BLK','BLKA','CFGA','CFGM','DFGA','DFGM','DIST','DRBC','DREB','FG3A','FG3M','FGA','FGM','FTA',
+                'FTAST','FTM','OPP_PTS_2ND_CHANCE','OPP_PTS_FB','OPP_PTS_OFF_TOV','OPP_PTS_PAINT','ORBC','OREB','PASS',
+                'PF','PFD','PTS','PTS_2ND_CHANCE','PTS_FB','PTS_OFF_TOV','PTS_PAINT','RBC','REB','SAST','STL','TCHS',
+                'TO','UFGA','UFGM']
+    PER36_KEYS+=['Above_the_Break_3_Back_Court(BC)_Back_Court_Shot_attempted',
+                'Above_the_Break_3_Center(C)_24+_ft_attempted',
+                'Above_the_Break_3_Left_Side_Center(LC)_24+_ft_attempted',
+                'Above_the_Break_3_Right_Side_Center(RC)_24+_ft_attempted',
+                'Backcourt_Back_Court(BC)_Back_Court_Shot_attempted',
+                'In_The_Paint_(Non_RA)_Center(C)_8_16_ft_attempted',
+                'In_The_Paint_(Non_RA)_Center(C)_Less_Than_8_ft_attempted',
+                'In_The_Paint_(Non_RA)_Left_Side(L)_8_16_ft_attempted',
+                'In_The_Paint_(Non_RA)_Right_Side(R)_8_16_ft_attempted',
+                'Left_Corner_3_Left_Side(L)_24+_ft_attempted',
+                'Mid_Range_Center(C)_16_24_ft_attempted',
+                'Mid_Range_Center(C)_8_16_ft_attempted',
+                'Mid_Range_Left_Side(L)_16_24_ft_attempted',
+                'Mid_Range_Left_Side(L)_8_16_ft_attempted',
+                'Mid_Range_Left_Side_Center(LC)_16_24_ft_attempted',
+                'Mid_Range_Right_Side(R)_16_24_ft_attempted',
+                'Mid_Range_Right_Side(R)_8_16_ft_attempted',
+                'Mid_Range_Right_Side_Center(RC)_16_24_ft_attempted',
+                'Restricted_Area_Center(C)_Less_Than_8_ft_attempted',
+                'Right_Corner_3_Right_Side(R)_24+_ft_attempted']
 
     def __init__(self, pid, tid, gid, window=10, recalculate=False):
         self.pid=int(pid)
@@ -652,7 +644,6 @@ class playerFeatureVector(featureVector):
 
         self.output=None
         self.loadOutput()
-
         print "Loaded Output"
 
         self.input=None
@@ -664,15 +655,16 @@ class playerFeatureVector(featureVector):
         '''
         Get the player's position in the specified game
         '''
-        if self.output is None:
+        if self.output is None or len(self.output.index) == 0:
             print "No output, going to DB"
-            player_pos=self.getPlayerPosition(pid)
+            player_pos=self.getPlayerPosition(self.pid)
         else:
             player_pos=self.output.iloc[0]['START_POSITION'].strip()
             if player_pos == '':
-                player_pos=self.getPlayerPosition(pid)
+                player_pos=self.getPlayerPosition(self.pid)
             else:
                 player_pos=[player_pos]
+        print "Player Position: %s" % player_pos
         return player_pos
 
     def parseGameRow(self, g, check_player=False):
@@ -766,7 +758,7 @@ class playerFeatureVector(featureVector):
                     merged=v
                     continue
                 else:
-                    cols_to_use=(v.columns - merged.columns).tolist()
+                    cols_to_use=v.columns.difference(merged.columns).tolist()
                     cols_to_use.append('GAME_ID')
                     merged=pd.merge(merged, v[cols_to_use], on='GAME_ID')
         if 'MIN' in merged:
@@ -782,7 +774,7 @@ class playerFeatureVector(featureVector):
                 sc_for_game['GAME_ID'] = row['GAME_ID']
                 shot_chart_rows.append(sc_for_game)
             shot_chart_df = pd.DataFrame(shot_chart_rows)
-            cols_to_use = (shot_chart_df.columns-merged.columns).tolist()
+            cols_to_use = shot_chart_df.columns.difference(merged.columns).tolist()
             cols_to_use.append('GAME_ID')
             merged = pd.merge(merged, shot_chart_df[cols_to_use], on='GAME_ID')
 
@@ -807,7 +799,7 @@ class playerFeatureVector(featureVector):
         hardcoded for up to 100 game window
         '''
         saved_query={"date": self.own_team_vector.end_date,
-                       "player_id": self.pid}
+                     "player_id": self.pid}
         saved=nba_split_vectors_collection.find_one(saved_query)
         if saved and not recalculate:
             return self.deserialize(saved['input'])
@@ -854,10 +846,6 @@ class playerFeatureVector(featureVector):
             if opp_id == self.oid:
                 against_team_keys.add(gid)
 
-        print home_game_keys
-        print road_game_keys
-        print against_team_keys
-
         # gather rows
         merged=self.imputeRows(self.mergeRows(window_games, self.pid))
         merged=merged.set_index(
@@ -888,24 +876,18 @@ class playerFeatureVector(featureVector):
         home_mean_diff=home_mean - total_mean
         road_mean_diff=road_mean - total_mean
         against_team_mean_diff=against_team_mean - total_mean
-
-        print home_mean_diff
-        print road_mean_diff
-        print against_team_mean_diff
-
         input_dict={'home_split': home_mean_diff,
-                      'road_split': road_mean_diff,
-                      'against_team_split': against_team_mean_diff}
+                    'road_split': road_mean_diff,
+                    'against_team_split': against_team_mean_diff}
 
         # save
-        to_save={"input": self.serialize(input_dict),
-                   "date": self.own_team_vector.end_date,
-                   "player_id": self.pid}
-        if saved:
-            nba_conn.updateDocument(nba_split_vectors_collection, saved[
-                                    '_id'], to_save, upsert=False)
-        else:
+        input_to_save = self.serialize(copy.deepcopy(input_dict))
+        try:
+            to_save={"input": input_to_save, "date": self.own_team_vector.end_date, "player_id": self.pid}
             nba_conn.saveDocument(nba_split_vectors_collection, to_save)
+        except DuplicateKeyError as e:
+            saved = nba_split_vectors_collection.find_one(saved_query)
+            nba_conn.updateDocument(nba_split_vectors_collection, saved['_id'], {'input': input_to_save}, upsert=False)
 
         return input_dict
 
@@ -920,6 +902,11 @@ class playerFeatureVector(featureVector):
         for p in pos:
             pos_trends=[]
             for (gid, tid), against_row in against_data.iteritems():
+                # skip current game
+                if int(gid) == int(self.gid):
+                    print "CURRENT GAME - SKIPPING TREND"
+                    continue
+
                 mean=against_row[p]['mean'].ix['mean'].astype('float64')
                 var=against_row[p]['var'].ix['mean'].astype('float64')
                 row=p_data[p_data['GAME_ID'] == int(gid)]
@@ -927,16 +914,27 @@ class playerFeatureVector(featureVector):
                     print "NO PLAYER ROW FOR GAME %s" % gid
                     continue
                 player_row=row.iloc[0]
-                trend=(player_row - mean) / np.sqrt(var)
+                trend = player_row.subtract(mean)
+
+                num_zeros = trend.ix[trend==0.0].index
+                var_zeros = var.ix[var==0.0].index
+                both_zeros = num_zeros & var_zeros
+
+                # fill in data
+                trend = trend.divide(np.sqrt(var))
+                trend[both_zeros] = 0.0
                 trend[np.isinf(trend)] = np.nan
-                print trend
+
                 pos_trends.append(trend)
-            alltrends=pd.concat(pos_trends, axis=1).transpose()
-            mean_distr=self.bayesianBootstrap(
-                alltrends, samples, df_mean, samplesize=samples)
-            var_distr=self.bayesianBootstrap(
-                alltrends, samples, df_var, samplesize=samples)
-            trends[p]={'mean': mean_distr, 'var': var_distr}
+
+            if len(pos_trends) == 0:
+                print "NO OPPORTUNITIES TO MEASURE TREND FOR POSITION %s" % p
+                trends[p] = {'mean': None, 'var': None}
+            else:
+                alltrends=pd.concat(pos_trends, axis=1).transpose()
+                mean_distr=self.bayesianBootstrap(alltrends, samples, df_mean, samplesize=samples)
+                var_distr=self.bayesianBootstrap(alltrends, samples, df_var, samplesize=samples)
+                trends[p]={'mean': mean_distr, 'var': var_distr}
         return trends
 
     def performanceAgainstTeam(self, opp_args, samples, recalculate=False):
@@ -949,20 +947,21 @@ class playerFeatureVector(featureVector):
         # position against each team
         for gid, tid in opp_args:
             # look in db
-            saved_query={"game_id": gid, "team_id": tid,
-                           "window": self.long_window}
+            saved_query={"game_id": gid, "team_id": tid, "window": self.long_window}
             saved=nba_against_vectors_collection.find_one(saved_query)
             if saved and not recalculate:
                 data[(gid, tid)]=self.deserialize(saved['input'])
                 continue
 
             # find opposition games
-            vector=teamFeatureVector(
-                tid, gid, window=self.window, recalculate=False)
-            query={"teams": tid, "date": {
-                "$lte": vector.end_date, "$gte": vector.season_start}}
-            window_games=[self.parseGameRow(_, check_player=False) for _ in nba_games_collection.find(
-                query, sort=[("date", -1)], limit=self.long_window)]
+            try:
+                vector=teamFeatureVector(tid, gid, window=self.window, recalculate=False)
+            except Exception as e:
+                print "Can't find performance against opp team %s @ %s: %s" % (tid, gid, e)
+                continue
+
+            query={"teams": tid, "date": {"$lte": vector.end_date, "$gte": vector.season_start}}
+            window_games=[self.parseGameRow(_, check_player=False) for _ in nba_games_collection.find(query, sort=[("date", -1)], limit=self.long_window)]
             window_games=[_ for _ in window_games if _]
 
             # find opposition players + positions
@@ -979,7 +978,7 @@ class playerFeatureVector(featureVector):
                         try:
                             pos=self.getPlayerPosition(pid)
                         except Exception as e:
-                            print e
+                            print "Error getting position for %s: %s" % (pid, e)
                             continue
                     else:
                         pos=[pos]
@@ -987,8 +986,8 @@ class playerFeatureVector(featureVector):
 
             # collect opposition player rows
             by_position={'G': [],
-                           'F': [],
-                           'C': []}
+                         'F': [],
+                         'C': []}
             for pid, pos in opp_players.iteritems():
                 rows=self.imputeRows(self.mergeRows(window_games, pid))
                 for p in pos:
@@ -1006,14 +1005,13 @@ class playerFeatureVector(featureVector):
             data[(gid, tid)]=by_position
 
             # save
-            to_save={"input": self.serialize(copy.deepcopy(
-                by_position)), "game_id": gid, "team_id": tid, "window": self.long_window}
-            if saved:
-                nba_conn.updateDocument(nba_against_vectors_collection, saved[
-                                        '_id'], to_save, upsert=False)
-            else:
+            input_to_save = self.serialize(copy.deepcopy(by_position))
+            try:
+                to_save = {"game_id": gid, "team_id": tid, "window": self.long_window, "input": input_to_save}
                 nba_conn.saveDocument(nba_against_vectors_collection, to_save)
-
+            except DuplicateKeyError as e:
+                saved=nba_against_vectors_collection.find_one(saved_query)
+                nba_conn.updateDocument(nba_against_vectors_collection, saved['_id'], {'input': input_to_save}, upsert=False)
         return data
 
     def loadInput(self, samples=30, recalculate=False):
@@ -1034,11 +1032,15 @@ class playerFeatureVector(featureVector):
         most_recent=window_games[0]['date']
         opp_args=[(self.gid, self.own_team_vector.oid)]
         for _ in window_games:
-            opp_team=_['teams'][0] if (
-                _['teams'][0] != self.own_team_vector.tid) else _['teams'][1]
+            opp_team=_['teams'][0] if (_['teams'][0] != self.own_team_vector.tid) else _['teams'][1]
             opp_args.append((_['_id'], int(opp_team)))
         merged=self.mergeRows(window_games, self.pid)
         data=self.imputeRows(merged)
+
+        # check if there is data
+        if len(data.index) == 0:
+            raise Exception("No Valid games found for %s (didn't play any minutes out of %s games)" % (self.pid, len(window_games)))
+
 
         # calculate averages
         expmean=self.exponentiallyWeightedMean(data)
@@ -1069,8 +1071,7 @@ class playerFeatureVector(featureVector):
 
         # calculate opposition strength
         print "loading against"
-        against_data=self.performanceAgainstTeam(
-            opp_args, samples, recalculate=False)
+        against_data=self.performanceAgainstTeam(opp_args, samples, recalculate=False)
         against_row=against_data[(self.gid, self.own_team_vector.oid)]
         self.input['against']={_: against_row[_] for _ in positions}
 
@@ -1079,18 +1080,15 @@ class playerFeatureVector(featureVector):
         trends=self.loadTrends(data, positions, against_data, samples)
         self.input['trend']=trends
 
-        # save/update
-        data={'input': self.serialize(copy.deepcopy(self.input)),
-                'player_id': self.pid,
-                'game_id': self.gid,
-                'team_id': self.tid,
-                'date': self.own_team_vector.end_date,
-                'window': self.window}
-        if saved:
-            nba_conn.updateDocument(nba_player_vectors_collection, saved[
-                                    '_id'], data, upsert=False)
-        else:
-            nba_conn.saveDocument(nba_player_vectors_collection, data)
+        # save
+        input_to_save = self.serialize(copy.deepcopy(self.input))
+        try:
+            to_save = {'input': input_to_save, 'player_id': self.pid, 'game_id': self.gid, 'team_id': self.tid,
+                       'date': self.own_team_vector.end_date, 'window': self.window}
+            nba_conn.saveDocument(nba_player_vectors_collection, to_save)
+        except DuplicateKeyError as e:
+            saved=nba_player_vectors_collection.find_one(saved_query)
+            nba_conn.updateDocument(nba_player_vectors_collection, saved['_id'], {'input': input_to_save}, upsert=False)
 
     def loadOutput(self):
         '''
@@ -1099,7 +1097,7 @@ class playerFeatureVector(featureVector):
         # parse game row for outputs
         parsed=self.parseGameRow(self.own_team_vector.game_row)
         if not parsed:
-            print "Game Row could not be parsed: possible bad game or future game"
+            print "No output, future? (pid %s, tid %s, gid %s)" % (self.pid, self.tid, self.gid)
             self.output=None
         else:
             data=self.imputeRows(self.mergeRows([parsed], self.pid))
@@ -1107,29 +1105,13 @@ class playerFeatureVector(featureVector):
 
 
 if __name__ == '__main__':
-
-    date = datetime(year=2015,month=1,day=15)
-    print getTeamsForDay(date)
-    print getPlayersForDay(date)
+    # pid, tid, gid = (202397, 1610612755, '0021401069')
+    # pid, tid, gid = (203095, 1610612753, '0011400098')
+    # pid, tid, gid = (204064, 1610612745, '0011400098')
+    pid, tid, gid = (2772, 1610612745, '0011400098')
+    getPlayerVector(pid, tid, gid)
     sys.exit(1)
 
 
-    '''
-    gid="0021400585"
-    tid="1610612749"
-    pid="201564"
-    '''
+    
 
-    gid="0021401069"
-    tid=1610612755
-    pid=202397
-
-    '''
-    v = teamFeatureVector(tid, gid, window=10, recalculate=True)
-    print list(v.input['means'].columns)
-    '''
-
-    v=playerFeatureVector(pid, tid, gid, window=10, recalculate=True)
-    for k, value in v.input.iteritems():
-        print k
-        print value

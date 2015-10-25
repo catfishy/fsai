@@ -2,34 +2,38 @@
 Calculate stat vectors for all games in database
 '''
 import multiprocessing as mp
+from datetime import datetime, timedelta
 
 from statsETL.bball.statsExtraction import getPlayerVector, getTeamVector
 from statsETL.db.mongolib import *
 
 RECALCULATE=False
 WINDOW=10
+DAYS_BEHIND = 365
 
 def yieldTeamGames():
-    games = nba_games_collection.find(no_cursor_timeout=True)
+    start_date = datetime.now() - timedelta(days=DAYS_BEHIND)
+    query = {'date' : {"$gte": start_date}}
+    games = nba_games_collection.find(query, no_cursor_timeout=True)
     for g in games:
         gid = g['_id']
         teams = g['teams']
         # try to find team stats
         for tid in teams:
             args = (tid, gid, RECALCULATE, WINDOW)
-            print args
             yield args
 
 
 def yieldPlayerGames():
-    games = nba_games_collection.find(no_cursor_timeout=True)
+    start_date = datetime.now() - timedelta(days=DAYS_BEHIND)
+    query = {'date' : {"$gte": start_date}}
+    games = nba_games_collection.find(query, no_cursor_timeout=True)
     for g in games:
         gid = g['_id']
         player_teams = g['player_teams']
+        date = g['date']
         for pid, tid in player_teams.iteritems():
-            pid = int(pid)
-            args = (pid, tid, gid, RECALCULATE, WINDOW) 
-            print args
+            args = (int(pid), tid, gid, RECALCULATE, WINDOW) 
             yield args
 
 
@@ -62,4 +66,9 @@ def updatePlayerStats():
     pool.join()
 
 if __name__ == "__main__":
-    updateTeamStats()
+
+    # getPlayerVector(2694, 1610612745, '0011400098', recalculate=True)
+    # sys.exit(1)
+
+    #updateTeamStats()
+    updatePlayerStats()

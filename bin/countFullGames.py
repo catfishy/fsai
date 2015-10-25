@@ -31,8 +31,7 @@ for y in years_back[::-1]:
         by_games[gid] = datapoints
         by_year['all'] += 1
         if datapoints > 0:
-            by_year['with_sc'] += 1
-            print gid
+            by_year['with_sc_%s' % y] += 1
         print by_year
 
         '''

@@ -29,12 +29,12 @@ for p in players:
         # update
         print "%s -> %s" % (br_pos, valids)
         nba_conn.updateDocument(nba_players_collection, p["_id"], {'BR_POSITION': list(set(valids))}, upsert=True)
-    elif len(br_pos) > 0:
+        br_pos = valids
+    if len(br_pos) > 0:
         data['br_pos'] += 1
         found = True
     else:
-        pass
-        #crawlNBAPlayer(p['_id'])
+        crawlNBAPlayer(p['_id'])
     if len(p['POSITION']) > 0:
         data['pos'] += 1
         found = True

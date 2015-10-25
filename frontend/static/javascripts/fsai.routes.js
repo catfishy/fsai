@@ -20,6 +20,14 @@
       controller: 'LoginController',
       controllerAs: 'vm',
       templateUrl: '/static/templates/authentication/login.html'
+    }).when('/nba', {
+      controller: 'NBAController',
+      controllerAs: 'vm',
+      templateUrl: '/static/templates/nba/stats.html'
+    }).when('/+:username/settings', {
+      controller: 'ProfileSettingsController',
+      controllerAs: 'vm',
+      templateUrl: '/static/templates/profiles/settings.html'
     }).when('/+:username', {
       controller: 'ProfileController',
       controllerAs: 'vm',
@@ -28,10 +36,6 @@
       controller: 'IndexController',
       controllerAs: 'vm',
       templateUrl: '/static/templates/layout/index.html'
-    }).when('/+:username/settings', {
-      controller: 'ProfileSettingsController',
-      controllerAs: 'vm',
-      templateUrl: '/static/templates/profiles/settings.html'
     }).otherwise('/');
   }
 })();

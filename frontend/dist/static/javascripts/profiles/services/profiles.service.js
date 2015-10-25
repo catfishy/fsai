@@ -1,0 +1,1 @@
+!function(){"use strict";function t(t){function e(e){return t["delete"]("/api/v1/accounts/"+e.id+"/")}function n(e){return t.get("/api/v1/accounts/"+e+"/")}function u(e){return t.put("/api/v1/accounts/"+e.username+"/",e)}var r={destroy:e,get:n,update:u};return r}angular.module("fsai.profiles.services").factory("Profile",t),t.$inject=["$http"]}();
