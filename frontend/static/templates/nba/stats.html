@@ -1,39 +1,76 @@
-<div class="container-fluid" id="nba_stats">
-  <form role="form" class="form-inline" ng-submit="vm.populateTeamStats()">
-    <div class="form-group">
-      <label for="nba-stats__startdate">Start Date: </label>
-      <input type="date" class="form-control" id="nbastats__startdate" ng-model="vm.startdate" placeholder="" />
-    </div>
-    <div class="form-group">
-      <label for="nba-stats__enddate">End Date: </label>
-      <input type="date" class="form-control" id="nbastats__enddate" ng-model="vm.enddate" placeholder="" />
-    </div>
-    <div class="form-group">
-      <button type="submit" class="btn btn-primary">Submit</button>
-    </div>
-  </form>
-  <div ng-show="vm.loading">
-    Loading
-  </div>
-  <div ng-hide="vm.loading">
-    <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="table table-striped">
-      <thead>
-        <tr>
-          <th ng-repeat="header in vm.displayed_headers" st-sort="'{{header.key}}'">{{header.name}}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr ng-repeat="row in vm.displayed_rows">
-          <td ng-repeat="header in vm.displayed_headers">{{row[header.key]}}</td>
-        </tr>
-      </tbody>
-      <tfoot>
-        <tr>
-          <td colspan="5" class="text-center">
-            <div st-pagination="" st-items-by-page="vm.itemsByPage" st-displayed-pages="7"></div>
-          </td>
-        </tr>
-      </tfoot>
-    </table>
-  </div>
+<div class="container-fluid">
+  <md-content class="md-padding" layout="column">
+    <form role="form" class="form-inline" ng-submit="vm.populateStats()">
+        <div class="form-group">
+          <label class="col-lg-2 control-label" for="nba-stats__startdate">Start Date</label>
+          <div class="col-lg-10" id="nba-stats__date">
+            <md-datepicker ng-model="vm.startdate" md-placeholder="Enter start date"></md-datepicker>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="col-lg-2 control-label" for="nba-stats__enddate">End Date</label>
+          <div class="col-lg-10" id="nba-stats__date">
+            <md-datepicker ng-model="vm.enddate" md-placeholder="Enter start date"></md-datepicker>
+          </div>
+        </div>
+        
+        <div class="form-group">
+            <label class="col-lg-2 control-label" for="nba-stats__statstype">Stats Type</label>
+            <div class="col-lg-10" id="nba-stats__statstype">
+              <md-radio-group ng-model="vm.stats_type">
+                <md-radio-button value="Player" class="md-primary">Player</md-radio-button>
+                <md-radio-button value="Team">Team</md-radio-button>
+              </md-radio-group>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <div class="col-lg-10 col-lg-offset-2">
+                <md-button type="submit" class="md-raised md-primary">Submit</md-button>
+            </div>
+        </div>
+    </form>
+  </md-content>
 </div> <!-- /.container-fluid -->
+
+<div class="animated slideInLeft" ng-show="vm.loading" layout="row" layout-sm="column" layout-align="space-around" id="nba_stats_loading">
+  <md-progress-circular md-mode="indeterminate"></md-progress-circular>
+</div>
+
+<div class="animated slideInLeft" ng-show="vm.loaded" class="col-xs-12" id="nba_stats_tabs">
+    <md-tabs>
+      <md-tab label="Windowed" ng-click="vm.slideInNewPage('windowed')"></md-tab>
+      <md-tab label="Meta" ng-click="vm.slideInNewPage('meta')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Team'" label="Season Stats" ng-click="vm.slideInNewPage('season')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Team'" label="Opponent Stats" ng-click="vm.slideInNewPage('opponent')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Player'" label="Exponential" ng-click="vm.slideInNewPage('exponential')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Player'" label="POS vs opponent" ng-click="vm.slideInNewPage('opponent_pos')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Player'" label="Trend within POS" ng-click="vm.slideInNewPage('trend_pos')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Player'" label="Home/Road Split" ng-click="vm.slideInNewPage('homeroadsplit')"></md-tab>
+      <md-tab ng-if="vm.stats_type == 'Player'" label="Opponent Split" ng-click="vm.slideInNewPage('oppsplit')"></md-tab>
+    </md-tabs>
+</div>
+
+<div class="animated slideInLeft" ng-show="vm.focused" class="col-xs-12" id="nba_stats_table">
+  <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="table table-striped">
+    <thead>
+      <tr>
+        <th ng-repeat="header in vm.displayed_headers" st-sort="'{{header.key}}'">{{header.name}}</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr ng-repeat="row in vm.displayed_rows">
+        <td ng-repeat="header in vm.displayed_headers">{{row[header.key]}}</td>
+      </tr>
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="5" class="text-center">
+          <div st-pagination="" st-items-by-page="vm.itemsByPage" st-displayed-pages="7"></div>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+

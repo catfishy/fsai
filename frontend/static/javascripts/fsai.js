@@ -3,6 +3,8 @@
 
     angular
         .module('fsai', [
+          'ngMaterial',
+          'ngAnimate',
           'smart-table',
           'fsai.routes',
           'fsai.authentication',
@@ -24,8 +26,6 @@
         .module('fsai')
         .run(run);
 
-
-
     run.$inject = ['$http'];
 
     /**
@@ -36,6 +36,14 @@
       $http.defaults.xsrfHeaderName = 'X-CSRFToken';
       $http.defaults.xsrfCookieName = 'csrftoken';
     }
+
+    /**
+    * @name themeConfig
+    * @desc Change Theme
+    */
+    function themeConfig($mdThemingProvider) {
+      $mdThemingProvider.theme('default').dark();
+    };
 
 
 })();

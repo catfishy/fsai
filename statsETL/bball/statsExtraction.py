@@ -52,23 +52,17 @@ def getPlayersForDay(date):
 def getPlayerVector(pid, tid, gid, recalculate=False, window=None):
     if not window:
         window = WINDOW
-
     vector = playerFeatureVector(
         pid, tid, gid, window=window, recalculate=recalculate)
-    result = vector.input
-
-    return result
+    return vector
 
 
 def getTeamVector(tid, gid, recalculate=False, window=None):
     if not window:
         window = WINDOW
-
     vector = teamFeatureVector(
         tid, gid, window=window, recalculate=recalculate)
-    result = vector.input
-
-    return result
+    return vector
 
 
 def df_mean(df, weights=None):
@@ -207,6 +201,16 @@ class featureVector():
             data[k]=v
         return data
 
+    def translateGameCode(self):
+        gamecode = self.gamesummary['GAMECODE'].split('/')[-1]
+        home = self.gamesummary['HOME_TEAM_ID']
+        away = self.gamesummary['VISITOR_TEAM_ID']
+        away_abbr = gamecode[:3]
+        home_abbr = gamecode[3:]
+        newcode = '%s@%s' % (away_abbr,home_abbr)
+        abbr = away_abbr if self.tid == away else home_abbr
+        return newcode, abbr
+
     def deserialize(self, data):
         for k, v in data.iteritems():
             if isinstance(v, dict):
@@ -328,7 +332,6 @@ class teamFeatureVector(featureVector):
         # find the game
         self.game_row=self.getGameRow(self.gid)
         self.gamesummary=self.game_row['GameSummary'].iloc[0]
-
         self.home_team=int(self.gamesummary['HOME_TEAM_ID'])
         self.away_team=int(self.gamesummary['VISITOR_TEAM_ID'])
         if self.tid not in set([self.home_team, self.away_team]):
@@ -339,6 +342,9 @@ class teamFeatureVector(featureVector):
         self.end_date=min(datetime.now(), self.game_row['date'] - timedelta(days=1))
         start_year=self.end_date.year - 1 if (self.end_date < datetime(day=1, month=10, year=self.end_date.year)) else self.end_date.year
         self.season_start=datetime(day=1, month=10, year=start_year)
+
+        # find days rest
+        self.days_rest = self.getDaysRest()
 
         # find the team
         team_row=nba_teams_collection.find_one(
@@ -360,6 +366,18 @@ class teamFeatureVector(featureVector):
 
         self.season_stats=None
         self.loadSeasonAverages(recalculate=recalculate)
+
+    def getDaysRest(self):
+        query={"teams": self.tid, "date": {
+            "$lte": self.end_date, "$gte": self.season_start}}
+        games = [_ for _ in nba_games_collection.find(query, sort=[("date", -1)], limit=1)]
+        if games:
+            most_recent = games[0]['date']
+            days_rest = (self.game_row['date'] - most_recent).days
+            days_rest = min(10, days_rest)
+        else:
+            days_rest = 10
+        return days_rest
 
     def loadSeasonAverages(self, samples=30, recalculate=False):
         '''
@@ -427,7 +445,7 @@ class teamFeatureVector(featureVector):
 
         # join shot charts
         shot_chart_rows = []
-        if join_shot_charts:
+        if join_shot_charts and len(merged.index) > 0:
             for i, row in merged.iterrows():
                 query = {"game_id": str(row['GAME_ID']).zfill(10), "TEAM_ID": row['TEAM_ID']}
                 sc_for_game = self.aggregateShotChart(query)
@@ -513,8 +531,7 @@ class teamFeatureVector(featureVector):
 
     def loadInput(self, samples=30, recalculate=False):
         # try to find in database
-        saved_query={"date": self.end_date,
-                       "team_id": self.tid, "window": self.window}
+        saved_query={"date": self.end_date, "team_id": self.tid, "window": self.window}
         saved=nba_team_vectors_collection.find_one(saved_query)
         if saved and not recalculate:
             self.input=self.deserialize(saved['input'])
@@ -767,13 +784,14 @@ class playerFeatureVector(featureVector):
 
         # join shot charts
         shot_chart_rows = []
-        if join_shot_charts:
+        if join_shot_charts and len(merged.index) > 0:
             for i, row in merged.iterrows():
                 query = {"game_id": str(row['GAME_ID']).zfill(10), "player_id": row['PLAYER_ID']}
                 sc_for_game = self.aggregateShotChart(query)
                 sc_for_game['GAME_ID'] = row['GAME_ID']
                 shot_chart_rows.append(sc_for_game)
             shot_chart_df = pd.DataFrame(shot_chart_rows)
+            print shot_chart_df
             cols_to_use = shot_chart_df.columns.difference(merged.columns).tolist()
             cols_to_use.append('GAME_ID')
             merged = pd.merge(merged, shot_chart_df[cols_to_use], on='GAME_ID')
@@ -1029,7 +1047,6 @@ class playerFeatureVector(featureVector):
         # parse own stats
         window_games=self.getWindowGames()
         print "Window Games: %s" % len(window_games)
-        most_recent=window_games[0]['date']
         opp_args=[(self.gid, self.own_team_vector.oid)]
         for _ in window_games:
             opp_team=_['teams'][0] if (_['teams'][0] != self.own_team_vector.tid) else _['teams'][1]
@@ -1041,6 +1058,7 @@ class playerFeatureVector(featureVector):
         if len(data.index) == 0:
             raise Exception("No Valid games found for %s (didn't play any minutes out of %s games)" % (self.pid, len(window_games)))
 
+        most_recent = self.getMostRecent()
 
         # calculate averages
         expmean=self.exponentiallyWeightedMean(data)
@@ -1053,7 +1071,7 @@ class playerFeatureVector(featureVector):
         self.input['expvar']=expvar
 
         # parse contextual stats (minutes played, days rest, etc)
-        days_rest=(self.own_team_vector.game_row['date'] - most_recent).days
+        days_rest=self.own_team_vector.days_rest
         print "Days Rest: %s" % days_rest
         self.input['days_rest']=days_rest
 

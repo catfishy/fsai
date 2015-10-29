@@ -9,7 +9,7 @@ from statsETL.db.mongolib import *
 
 RECALCULATE=False
 WINDOW=10
-DAYS_BEHIND = 365
+DAYS_BEHIND = 15
 
 def yieldTeamGames():
     start_date = datetime.now() - timedelta(days=DAYS_BEHIND)
@@ -67,8 +67,7 @@ def updatePlayerStats():
 
 if __name__ == "__main__":
 
-    # getPlayerVector(2694, 1610612745, '0011400098', recalculate=True)
-    # sys.exit(1)
+    getPlayerVector(203898, 1610612749, '0021500047', recalculate=True)
+    sys.exit(1)
 
-    #updateTeamStats()
     updatePlayerStats()

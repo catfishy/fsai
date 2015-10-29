@@ -29,7 +29,12 @@ class MongoConn:
         return doc_id
 
     def updateDocument(self, coll, row_id, doc, upsert=False):
-        result = coll.update_one({"_id": row_id}, {'$set' : doc}, upsert=upsert)
+        filt = {"_id": row_id}
+        result = self.updateDocumentByFilter(coll, filt, doc, upsert=upsert)
+        return result
+
+    def updateDocumentByFilter(self, coll, filt, doc, upsert=False):
+        result = coll.update_one(filt, {'$set' : doc}, upsert=upsert)
         return result
 
     def saveDocument(self, coll, doc):
@@ -102,7 +107,6 @@ class MongoConn:
 nba_conn = MongoConn(db=NBA_DB)
 
 # old
-
 upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
 advanced_collection = nba_conn.getCollection("advanced")
 onoff_collection = nba_conn.getCollection("onoff")
@@ -116,7 +120,7 @@ game_collection = nba_conn.getCollection("games")
 player_collection = nba_conn.getCollection("players")
 player_game_collection = nba_conn.getCollection("player_games")
 team_game_collection = nba_conn.getCollection("team_games")
-espn_depth_collection = nba_conn.getCollection("depthcharts")
+
 nba_conn.ensureIndex(team_collection, [("url", 1)])
 nba_conn.ensureIndex(player_collection, [("url", 1)])
 nba_conn.ensureIndex(player_collection, [("nba_id", 1)])
@@ -129,12 +133,12 @@ nba_conn.ensureIndex(team_game_collection, [("team_id", 1),("game_id", 1)], uniq
 nba_conn.ensureIndex(player_game_collection, [("player_id", 1),("game_id", 1)], unique=True)
 nba_conn.ensureIndex(espn_stat_collection, [('time', 1)], unique=True)
 nba_conn.ensureIndex(espn_player_stat_collection, [("player_id", 1),('time', 1)], unique=True)
-nba_conn.ensureIndex(espn_depth_collection, [('time', 1)], unique=True)
 '''
 
 # current
 nba_teams_collection = nba_conn.getCollection("nba_teams")
 shot_chart_collection = nba_conn.getCollection("shot_chart")
+depth_collection = nba_conn.getCollection("depthchart")
 shot_collection = nba_conn.getCollection("shot")
 defense_collection = nba_conn.getCollection("defense")
 rebound_collection = nba_conn.getCollection("rebound")
@@ -149,8 +153,10 @@ nba_player_vectors_collection = nba_conn.getCollection("nba_player_vectors")
 nba_against_vectors_collection = nba_conn.getCollection("nba_against_vectors")
 nba_split_vectors_collection = nba_conn.getCollection("nba_split_vectors")
 
+
 # indices
 nba_conn.ensureIndex(nba_teams_collection, [("team_id", 1),("season", 1)], unique=True)
+nba_conn.ensureIndex(depth_collection, [("team_id", 1),("season", 1)], unique=True)
 nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
 nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
 nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)

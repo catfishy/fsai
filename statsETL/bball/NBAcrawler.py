@@ -124,7 +124,7 @@ def crawlUpcomingGames(days_ahead=7):
             summary['GAMECODE'] = gamecode
 
             # get rosters, inactives, starters
-            rosters = {tid: crawlCurrentRoster(tid) for tid in teams}
+            rosters = {tid: getCurrentRoster(tid, season) for tid in teams}
             inactives = [{"PLAYER_ID": int(pid), "TEAM_ID": int(tid)} for tid,v in rosters.iteritems() for pid in v['inactives']]
             players = [pid for tid,v in rosters.iteritems() for pid in v['roster']]
             player_teams = {str(pid):int(tid) for tid,v in rosters.iteritems() for pid in v['roster']}
@@ -144,8 +144,7 @@ def crawlUpcomingGames(days_ahead=7):
                     'season': season,
                     'date': date,
                     'players': players,
-                    'teams': teams,
-                    'team_players': player_teams,
+                    'player_teams': player_teams,
                     'teams': sorted([home_id, visitor_id]),
                     'InactivePlayers': pd.DataFrame(inactives).to_json(),
                     'GameSummary': pd.DataFrame([summary]).to_json(),
@@ -159,21 +158,51 @@ def crawlUpcomingGames(days_ahead=7):
             new_games.append(gid)
     return new_games
 
-def crawlCurrentRoster(tid):
+def getCurrentRoster(tid, season):
     data = {'roster': [],
             'starters': {},
             'inactives': []}
+    # find depth chart row
+    row = depth_collection.find_one({"team_id": int(tid), "season": int(season)})
+    roster = row['players']
+    data['roster'] = roster
     return data
 
 '''
 def updateNBARosterURLS(roster_urls):
     rcrawl = rosterCrawler(roster_urls)
     rcrawl.run()
-
-def saveNBADepthChart():
-    dcrawl = depthCrawler()
-    dcrawl.run()
 '''
+
+def crawlNBARoster(years=None):
+    url_template = "http://stats.nba.com/stats/commonteamroster?LeagueID=00&Season=%s&TeamID=%s"
+    if not years:
+        years = years_back
+    for yr in years:
+        yr_teams = nba_teams_collection.find({"season": yr})
+        for team in yr_teams:
+            tid = team["team_id"]
+            season = createSeasonKey(yr)
+            url = url_template % (season, tid)
+            try:
+                resultsets = turnJSONtoPD(url)
+                if 'CommonTeamRoster' not in resultsets:
+                    raise Exception("No Roster Found")
+                infoset = resultsets["CommonTeamRoster"]
+            except Exception as e:
+                print "Crawling roster %s for year %s parsing failed: %s, %s" % (tid, season, url, e)
+                continue
+
+            team_info = {'players' : list(infoset['PLAYER_ID']),
+                         'team_id' : tid,
+                         'season': yr}
+            filt = {'team_id': tid,
+                    'season': yr}
+
+            nba_conn.updateDocumentByFilter(depth_collection, filt, team_info, upsert=True)
+        
+    return True
+
 
 def crawlNBAGames(date_start,date_end):
     date_start = datetime.strptime(date_start, '%m/%d/%Y')
@@ -352,9 +381,6 @@ def findNBATeam(tid, year, crawl=True):
 
 
 def crawlNBATeam(tid, years=None):
-    '''
-    "http://stats.nba.com/stats/commonteamroster?LeagueID=00&Season=2015-16&TeamID=1610612749"
-    '''
     url_template = "http://stats.nba.com/stats/teaminfocommon?LeagueID=00&SeasonType=Regular+Season&TeamID=%s&season=%s"
     if not years:
         years = years_back
@@ -833,7 +859,8 @@ def createTeamRegex(raw_string):
 '''
 class depthCrawler(Crawler):
 
-    INIT_PAGE = "http://espn.go.com/nba/depth/_/type/print"
+    INIT_PAGE = "http://www.rotoworld.com/teams/depth-charts/nba.aspx"
+
 
     def __init__(self, logger=None):
         super(depthCrawler, self).__init__(logger=logger)
@@ -850,9 +877,10 @@ class depthCrawler(Crawler):
             return False
 
         date = soup.find("font", class_="date").text.strip()
-        date_obj = datetime.strptime("April 13, 2015", "%B %d, %Y")
+        print "DEPTH DATE: %s" % date
+        date = datetime.strptime(date, "%B %d, %Y")
 
-        to_save = {"time" : date_obj,
+        to_save = {"date" : date,
                    "invalids": [],
                    "stats": {}}
 
@@ -867,6 +895,7 @@ class depthCrawler(Crawler):
             contents = d.font.contents
             team_name = contents[0].text.strip()
             raw_teams.append(team_name)
+        print raw_teams
         teamnames = translateTeamNames(raw_teams)
 
         # parse the depth charts
@@ -1072,7 +1101,8 @@ class upcomingGameCrawler(Crawler):
 
 if __name__=="__main__":
 
-
+    crawlNBARoster()
+    sys.exit(1)
     '''
     # explicitly crawl players
     pool = mp.Pool(processes=4)
