@@ -60,8 +60,7 @@ def getPlayerVector(pid, tid, gid, recalculate=False, window=None):
 def getTeamVector(tid, gid, recalculate=False, window=None):
     if not window:
         window = WINDOW
-    vector = teamFeatureVector(
-        tid, gid, window=window, recalculate=recalculate)
+    vector = teamFeatureVector(tid, gid, window=window, recalculate=recalculate)
     return vector
 
 
@@ -362,14 +361,19 @@ class teamFeatureVector(featureVector):
         self.loadOutput()
 
         self.input=None
-        self.loadInput(recalculate=recalculate)
+        try:
+            self.loadInput(recalculate=recalculate)
+        except Exception as e:
+            print "Can't load team input: %s" % e
 
         self.season_stats=None
-        self.loadSeasonAverages(recalculate=recalculate)
+        try:
+            self.loadSeasonAverages(recalculate=recalculate)
+        except Exception as e:
+            print "Can't load team season avgs: %s" % e
 
     def getDaysRest(self):
-        query={"teams": self.tid, "date": {
-            "$lte": self.end_date, "$gte": self.season_start}}
+        query={"teams": self.tid, "date": {"$lte": self.end_date, "$gte": self.season_start}}
         games = [_ for _ in nba_games_collection.find(query, sort=[("date", -1)], limit=1)]
         if games:
             most_recent = games[0]['date']
@@ -640,6 +644,7 @@ class playerFeatureVector(featureVector):
         self.tid=int(tid)
         self.window=int(window)
         self.long_window=self.window * 2
+        self.getPlayerName()
 
         # get game info
         self.game_row=self.getGameRow(self.gid)
@@ -657,16 +662,23 @@ class playerFeatureVector(featureVector):
         self.opp_team_vector=teamFeatureVector(
             self.oid, self.gid, window=self.window, recalculate=False)
 
-        print "Obtained Team Vectors"
-
         self.output=None
         self.loadOutput()
-        print "Loaded Output"
 
         self.input=None
-        self.loadInput(samples=30, recalculate=recalculate)
+        try:
+            self.loadInput(samples=30, recalculate=recalculate)
+            print "Loaded Input"
+        except Exception as e:
+            print "Can't load player input: %s" % e
 
-        print "Loaded Input"
+    def getPlayerName(self):
+        player_row = nba_conn.findByID(nba_players_collection, self.pid)
+        if player_row:
+            self.player_name = player_row["DISPLAY_FIRST_LAST"]
+        else:
+            print "CAN'T FIND PLAYER ROW: %s" % self.pid
+            self.player_name = "?"
 
     def getGamePosition(self):
         '''
@@ -791,7 +803,6 @@ class playerFeatureVector(featureVector):
                 sc_for_game['GAME_ID'] = row['GAME_ID']
                 shot_chart_rows.append(sc_for_game)
             shot_chart_df = pd.DataFrame(shot_chart_rows)
-            print shot_chart_df
             cols_to_use = shot_chart_df.columns.difference(merged.columns).tolist()
             cols_to_use.append('GAME_ID')
             merged = pd.merge(merged, shot_chart_df[cols_to_use], on='GAME_ID')
@@ -917,6 +928,7 @@ class playerFeatureVector(featureVector):
         p_data = player_data.copy()
         p_data = p_data.convert_objects(convert_numeric=True)
         p_data = p_data._get_numeric_data().astype('float64')
+        
         for p in pos:
             pos_trends=[]
             for (gid, tid), against_row in against_data.iteritems():
@@ -947,12 +959,14 @@ class playerFeatureVector(featureVector):
 
             if len(pos_trends) == 0:
                 print "NO OPPORTUNITIES TO MEASURE TREND FOR POSITION %s" % p
-                trends[p] = {'mean': None, 'var': None}
+                trend_row = {'mean': None, 'var': None}
             else:
                 alltrends=pd.concat(pos_trends, axis=1).transpose()
                 mean_distr=self.bayesianBootstrap(alltrends, samples, df_mean, samplesize=samples)
                 var_distr=self.bayesianBootstrap(alltrends, samples, df_var, samplesize=samples)
-                trends[p]={'mean': mean_distr, 'var': var_distr}
+                trend_row = {'mean': mean_distr, 'var': var_distr}
+
+            trends[p] = trend_row
         return trends
 
     def performanceAgainstTeam(self, opp_args, samples, recalculate=False):
@@ -1044,21 +1058,40 @@ class playerFeatureVector(featureVector):
         print "Calculating INPUT"
         self.input={}
 
-        # parse own stats
+        # parse contextual stats
+        days_rest=self.own_team_vector.days_rest
+        print "Days Rest: %s" % days_rest
+        self.input['days_rest']=days_rest
+        self.input['home/road']=self.own_team_vector.input['home/road']
+        self.input['location']=self.own_team_vector.input['location']
+        positions=self.getGamePosition()
+        self.input['position']=positions
+
+        # get window games and opp args
         window_games=self.getWindowGames()
         print "Window Games: %s" % len(window_games)
-        opp_args=[(self.gid, self.own_team_vector.oid)]
+        cur_against = (self.gid, self.own_team_vector.oid)
+        opp_args=[cur_against]
         for _ in window_games:
             opp_team=_['teams'][0] if (_['teams'][0] != self.own_team_vector.tid) else _['teams'][1]
             opp_args.append((_['_id'], int(opp_team)))
+        
+        # calculate opposition strength
+        print "loading against"
+        against_data=self.performanceAgainstTeam(opp_args, samples, recalculate=False)
+        against_row=against_data[cur_against]
+        self.input['against']={_: against_row[_] for _ in positions}
+
+        # calculate splits
+        print "loading splits"
+        splits=self.loadSplits(samples, days_rest, recalculate=False)
+        self.input['splits']=splits
+
+        # parse own stats
         merged=self.mergeRows(window_games, self.pid)
         data=self.imputeRows(merged)
-
-        # check if there is data
         if len(data.index) == 0:
             raise Exception("No Valid games found for %s (didn't play any minutes out of %s games)" % (self.pid, len(window_games)))
-
-        most_recent = self.getMostRecent()
 
         # calculate averages
         expmean=self.exponentiallyWeightedMean(data)
@@ -1069,29 +1102,6 @@ class playerFeatureVector(featureVector):
         self.input['variances']=sample_vars
         self.input['expmean']=expmean
         self.input['expvar']=expvar
-
-        # parse contextual stats (minutes played, days rest, etc)
-        days_rest=self.own_team_vector.days_rest
-        print "Days Rest: %s" % days_rest
-        self.input['days_rest']=days_rest
-
-        # pull up relevant team vector features
-        self.input['home/road']=self.own_team_vector.input['home/road']
-        self.input['location']=self.own_team_vector.input['location']
-
-        positions=self.getGamePosition()
-        self.input['position']=positions
-
-        # calculate splits
-        print "loading splits"
-        splits=self.loadSplits(samples, days_rest, recalculate=False)
-        self.input['splits']=splits
-
-        # calculate opposition strength
-        print "loading against"
-        against_data=self.performanceAgainstTeam(opp_args, samples, recalculate=False)
-        against_row=against_data[(self.gid, self.own_team_vector.oid)]
-        self.input['against']={_: against_row[_] for _ in positions}
 
         # calculate trends
         print "loading trends"

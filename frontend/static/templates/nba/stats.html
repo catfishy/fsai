@@ -39,16 +39,20 @@
 </div>
 
 <div class="animated slideInLeft" ng-show="vm.loaded" class="col-xs-12" id="nba_stats_tabs">
-    <md-tabs>
+    <md-tabs ng-if="vm.stats_type == 'Team'">
       <md-tab label="Windowed" ng-click="vm.slideInNewPage('windowed')"></md-tab>
       <md-tab label="Meta" ng-click="vm.slideInNewPage('meta')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Team'" label="Season Stats" ng-click="vm.slideInNewPage('season')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Team'" label="Opponent Stats" ng-click="vm.slideInNewPage('opponent')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Player'" label="Exponential" ng-click="vm.slideInNewPage('exponential')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Player'" label="POS vs opponent" ng-click="vm.slideInNewPage('opponent_pos')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Player'" label="Trend within POS" ng-click="vm.slideInNewPage('trend_pos')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Player'" label="Home/Road Split" ng-click="vm.slideInNewPage('homeroadsplit')"></md-tab>
-      <md-tab ng-if="vm.stats_type == 'Player'" label="Opponent Split" ng-click="vm.slideInNewPage('oppsplit')"></md-tab>
+      <md-tab label="Season Stats" ng-click="vm.slideInNewPage('season')"></md-tab>
+      <md-tab label="Opponent Stats" ng-click="vm.slideInNewPage('opponent')"></md-tab>
+    </md-tabs>
+    <md-tabs ng-if="vm.stats_type == 'Player'">
+      <md-tab label="Windowed" ng-click="vm.slideInNewPage('windowed')"></md-tab>
+      <md-tab label="Meta" ng-click="vm.slideInNewPage('meta')"></md-tab>
+      <md-tab label="Exponential" ng-click="vm.slideInNewPage('exponential')"></md-tab>
+      <md-tab label="POS vs opponent" ng-click="vm.slideInNewPage('opponent_pos')"></md-tab>
+      <md-tab label="Trend within POS" ng-click="vm.slideInNewPage('trend_pos')"></md-tab>
+      <md-tab label="Home/Road Split" ng-click="vm.slideInNewPage('homeroadsplit')"></md-tab>
+      <md-tab label="Opponent Split" ng-click="vm.slideInNewPage('oppsplit')"></md-tab>
     </md-tabs>
 </div>
 

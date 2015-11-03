@@ -59,8 +59,13 @@
 
     function linkDisplayed(key) {
       vm.displayed_headers = [].concat(vm.stat_headers[key]);
-      vm.displayed_rows = [].concat(vm.stat_rows[key]);
       vm.displayed_page = key;
+    }
+
+    function clearPage(){
+      vm.loading = false;
+      vm.loaded = false;
+      vm.focused = false;
     }
 
     function slideInNewTable(key) {
@@ -75,11 +80,14 @@
       if (key == vm.displayed_page) {
         return;
       }
-      vm.loading = false;
-      vm.loaded = true;
+      vm.loading = true;
+      vm.loaded = false;
       vm.focused = false;
       linkDisplayed(key);
+      vm.loading = false;
+      vm.loaded = true;
       vm.focused = true;
+
     }
 
     function slideInLoading() {
@@ -94,12 +102,14 @@
         console.log("previous request canceled");
       }
       slideInLoading();
+      console.log("Loading");
       if (vm.stats_type == 'Player') {
         populatePlayerStats();
       } else if (vm.stats_type == 'Team') {
         populateTeamStats();
       } else {
         console.log("INVALID STATS TYPE");
+        clearPage();
       }
     }
 
@@ -107,30 +117,42 @@
       vm.canceler = $q.defer();
       NBAStats.getPlayerStats(vm.startdate, vm.enddate, vm.player_statstypes, vm.canceler)
         .success(function(response, status, headers, config){
-          for (var key in response) {
-            vm.stat_headers[key] = response[key]['headers'];
-            vm.stat_rows[key] = response[key]['rows'];
-          }
+          var response_dict = JSON.parse(response);
+          vm.stat_headers = response_dict['headers'];
+          vm.stat_rows = response_dict['rows'];
+          vm.displayed_rows = [].concat(vm.stat_rows);
+          slideInNewTable('windowed');
+          vm.canceler = undefined;
         })
         .error(function(response, status, headers, config) {
-          console.log("Window team stats api error");
+          if (status === -1) {
+            console.log("stats request canceled");
+          } else {
+            console.log("player stats api error");
+            clearPage();
+          }
         })
-      slideInNewTable('windowed');
     }
 
     function populateTeamStats() {
       vm.canceler = $q.defer();
       NBAStats.getTeamStats(vm.startdate, vm.enddate, vm.team_statstypes, vm.canceler)
         .success(function(response, status, headers, config){
-          for (var key in response) {
-            vm.stat_headers[key] = response[key]['headers'];
-            vm.stat_rows[key] = response[key]['rows'];
-          }
+          var response_dict = JSON.parse(response);
+          vm.stat_headers = response_dict['headers'];
+          vm.stat_rows = response_dict['rows'];
+          vm.displayed_rows = [].concat(vm.stat_rows);
+          slideInNewTable('windowed');
+          vm.canceler = undefined;
         })
         .error(function(response, status, headers, config) {
-          console.log("team stats api error");
+          if (status === -1) {
+            console.log("stats request canceled");
+          } else {
+            console.log("player stats api error");
+            clearPage();
+          }
         })
-      slideInNewTable('windowed');
     }
   }
 })();

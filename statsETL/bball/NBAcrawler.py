@@ -505,7 +505,8 @@ def crawlNBAPlayerData(years=None, last_n_days=None):
         years=years_back
     pool = mp.Pool(processes=8)
     def args():
-        if last_n_games is None:
+        used = set()
+        if last_n_days is None:
             players = nba_players_collection.find(no_cursor_timeout=True)
         else:
             # find players who played in last n days
@@ -515,28 +516,19 @@ def crawlNBAPlayerData(years=None, last_n_days=None):
             players = []
             for g in games:
                 g_players = g['players']
-                players += players
+                players += g_players
             players = map(int,list(set(players)))
         for p in players:
             if isinstance(p,int):
                 player_id = p
             else:
                 player_id = p['_id']
-            '''
-            fromyr = p['FROM_YEAR']
-            toyr = p['TO_YEAR']
-            if fromyr is None or toyr is None:
-                print "Can't determine player year range"
-                continue
-            fromyr  = int(fromyr)
-            toyr = int(toyr)
-            active_years = range(fromyr, toyr+1)
-            valid_years = list(set(active_years) & set(years))
-            '''
             for yr in years:
                 args = (player_id, yr)
-                print args
-                yield args
+                if args not in used:
+                    print args
+                    used.add(args)
+                    yield args
     for i, _ in enumerate(pool.imap_unordered(runPlayerCrawlFunctions, args()), 1): 
         pass
     pool.close()

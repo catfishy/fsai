@@ -20,9 +20,9 @@ else
 fi
 
 # Add project home to python path
-PTH='/usr/local/fsai'
+PROJECTPTH='/usr/local/fsai'
 CMD='export PYTHONPATH=${PYTHONPATH}:'
-CMD=$CMD$PTH
+CMD=$CMD$PROJECTPTH
 if grep -Fxq "$CMD" ${HOME}/.bash_profile
 then
     echo "python path export found"
@@ -47,10 +47,13 @@ fi
 # reload bash profile
 source ${HOME}/.bash_profile
 
-# If in dev, start mongodb with db=/data/db directory
+# If in dev, 
+# start mongodb with db=/data/db directory
+# start redis-server with conf=/usr/local/etc/redis.conf
+
 if [ "$INITENV" == 'DEV' ]
 then
-    # check if already runn
+    # check if already run mongod
     PRIORMONGOD=$(pgrep mongod)
     if [ "$PRIORMONGOD" == "" ]
     then
@@ -60,6 +63,16 @@ then
         mongod --fork --logpath /var/log/mongodb.log
     else
         echo "Mongod already running PID: $PRIORMONGOD"
+    fi
+    # check if already run redis
+    REDISCONF=$PROJECTPTH'/init/redis.conf'
+    PRIORREDIS=$(pgrep redis)
+    if [ "$PRIORREDIS"]
+    then
+        echo "Starting local redis server with conf $REDISCONF"
+        /usr/local/bin/redis-server $REDISCONF
+    else
+        echo "Redis already running PID: $PRIORREDIS"
     fi
 fi
 

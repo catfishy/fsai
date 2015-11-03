@@ -58,7 +58,7 @@ class MongoConn:
         return result
 
     def findByID(self, coll, doc_id):
-        result = coll.find_one({"_id": ObjectId(doc_id)})
+        result = coll.find_one({"_id": doc_id})
         return result
 
     def find(self, coll, query, sort=None):
@@ -153,7 +153,6 @@ nba_player_vectors_collection = nba_conn.getCollection("nba_player_vectors")
 nba_against_vectors_collection = nba_conn.getCollection("nba_against_vectors")
 nba_split_vectors_collection = nba_conn.getCollection("nba_split_vectors")
 
-
 # indices
 nba_conn.ensureIndex(nba_teams_collection, [("team_id", 1),("season", 1)], unique=True)
 nba_conn.ensureIndex(depth_collection, [("team_id", 1),("season", 1)], unique=True)
@@ -173,6 +172,7 @@ nba_conn.ensureIndex(nba_season_averages_collection, [("date", 1), ("team_id", 1
 nba_conn.ensureIndex(nba_player_vectors_collection, [("date", 1), ("player_id", 1), ("game_id",1), ("team_id",1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_against_vectors_collection, [("game_id", 1), ("team_id", 1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_split_vectors_collection, [("date", 1), ("player_id", 1)], unique=True)
+
 
 def getGameData(game_id):
     row = espn_games_collection.find_one({"_id": game_id})

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from statsETL.bball.statsExtraction import getPlayerVector, getTeamVector
 from statsETL.db.mongolib import *
 
-RECALCULATE=False
+RECALCULATE=True
 WINDOW=10
 DAYS_BEHIND = 15
 
@@ -67,7 +67,8 @@ def updatePlayerStats():
 
 if __name__ == "__main__":
 
-    getPlayerVector(203898, 1610612749, '0021500047', recalculate=True)
-    sys.exit(1)
+    # vector = getPlayerVector(203961,1610612758,'0021500031', recalculate=False)
+    # print vector.input['means'].ix['mean'].to_dict()
+    # sys.exit(1)
 
     updatePlayerStats()
