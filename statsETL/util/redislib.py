@@ -3,12 +3,13 @@ import simplejson as json
 import redis
 import socket
 
-CACHE_SERVER = 127.0.0.1
+CACHE_SERVER = '127.0.0.1'
 CACHE_PORT = 6379
 
 def getRedisCache():
     """Get REDIS connection. Redis client is thread-safe."""
     return redis.StrictRedis(CACHE_SERVER, CACHE_PORT)
+
 
 class RedisSemaphore:
 

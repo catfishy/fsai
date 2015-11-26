@@ -24,10 +24,9 @@ from statsETL.db.mongolib import *
 
 WINDOW = 10 # TODO: LET THIS BE VARIED
 
-
 def getGamesForDay(date):
     date = datetime(day=date.day, month=date.month, year=date.year)
-    query = {"date" : {"$gte" : date, "$lte": date+timedelta(days=1)}}
+    query = {"date" : {"$gte" : date, "$lt": date+timedelta(days=1)}}
     games = nba_games_collection.find(query)
     return games
 
@@ -193,9 +192,9 @@ class featureVector():
 
     def serialize(self, data):
         for k, v in data.iteritems():
-            if isinstance(v, pd.DataFrame):
+            if isinstance(v, pd.DataFrame) or isinstance(v, pd.Series):
                 v=v.to_json()
-            if isinstance(v, dict):
+            elif isinstance(v, dict):
                 v=self.serialize(v)
             data[k]=v
         return data
@@ -215,10 +214,12 @@ class featureVector():
             if isinstance(v, dict):
                 v=self.deserialize(v)
             else:
-                try:
-                    v=pd.read_json(v)
-                except Exception as e:
-                    pass
+                for typ in ['frame', 'series']:
+                    try:
+                        v=pd.read_json(v,typ=typ)
+                        break
+                    except Exception as e:
+                        pass
             data[k]=v
         return data
 
@@ -230,10 +231,8 @@ class featureVector():
                           append=False, inplace=False, verify_integrity=False)
         df=df.sort_index(axis=0)
         df=df._get_numeric_data()
-        result=pd.ewma(df, span=len(df.index), adjust=True,
-                         min_periods=len(df.index), ignore_na=True)
-        result_row=result.tail(1)
-        result_row=result_row.reset_index(drop=True)
+        result=pd.ewma(df, span=len(df.index), adjust=True, ignore_na=True)
+        result_row=result.tail(1).iloc[0]
         return result_row
 
     def exponentiallyWeightedVar(self, data):
@@ -244,10 +243,8 @@ class featureVector():
                           append=False, inplace=False, verify_integrity=False)
         df=df.sort_index(axis=0)
         df=df._get_numeric_data()
-        result=result=pd.ewmvar(df, span=len(
-            df.index), adjust=True, min_periods=len(df.index), ignore_na=True)
-        result_row=result.tail(1)
-        result_row=result_row.reset_index(drop=True)
+        result=result=pd.ewmvar(df, span=len(df.index), adjust=True, ignore_na=True)
+        result_row=result.tail(1).iloc[0]
         return result_row
 
     def bootstrap(self, data, num_samples, statistic):
@@ -668,9 +665,9 @@ class playerFeatureVector(featureVector):
         self.input=None
         try:
             self.loadInput(samples=30, recalculate=recalculate)
-            print "Loaded Input"
         except Exception as e:
             print "Can't load player input: %s" % e
+            traceback.print_exc()
 
     def getPlayerName(self):
         player_row = nba_conn.findByID(nba_players_collection, self.pid)
@@ -937,6 +934,10 @@ class playerFeatureVector(featureVector):
                     print "CURRENT GAME - SKIPPING TREND"
                     continue
 
+                if against_row[p]['mean'] is None or against_row[p]['var'] is None:
+                    print "NO against stats: skipping"
+                    continue
+
                 mean=against_row[p]['mean'].ix['mean'].astype('float64')
                 var=against_row[p]['var'].ix['mean'].astype('float64')
                 row=p_data[p_data['GAME_ID'] == int(gid)]
@@ -1027,13 +1028,17 @@ class playerFeatureVector(featureVector):
 
             # join into dataframes
             for k, v in by_position.iteritems():
-                allrows=pd.concat(v, axis=0).reset_index(drop=True)
-                print "%s: %s" % (k, allrows.shape)
-                mean_distr=self.bayesianBootstrap(
-                    allrows, samples, df_mean, samplesize=samples)
-                var_distr=self.bayesianBootstrap(
-                    allrows, samples, df_var, samplesize=samples)
-                by_position[k]={"mean": mean_distr, "var": var_distr}
+                if len(v) > 0:
+                    allrows=pd.concat(v, axis=0).reset_index(drop=True)
+                    print "%s: %s" % (k, allrows.shape)
+                    mean_distr=self.bayesianBootstrap(
+                        allrows, samples, df_mean, samplesize=samples)
+                    var_distr=self.bayesianBootstrap(
+                        allrows, samples, df_var, samplesize=samples)
+                    by_position[k]={"mean": mean_distr, "var": var_distr}
+                else:
+                    by_position[k] = {"mean": None, "var": None}
+                
             data[(gid, tid)]=by_position
 
             # save

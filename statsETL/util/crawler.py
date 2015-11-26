@@ -12,6 +12,7 @@ import pandas as pd
 from bs4 import BeautifulSoup, element
 import requests
 
+
 def logItem(logname, newline):
     if not isinstance(newline, str):
         newline = "%s" % (newline,)

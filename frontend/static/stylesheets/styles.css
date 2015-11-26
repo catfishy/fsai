@@ -1,5 +1,39 @@
 body { padding-top: 0px; }
 
+table.tableSection {
+    width: 100%;
+    table-layout: fixed;
+}
+
+table.tableSection thead, table.tableSection tbody {
+    float: left;
+}
+
+table.tableSection tbody {
+    overflow: auto;
+    height: 500px;
+}
+
+table.tableSection th, table.tableSection td {
+    text-align: center;
+    padding: 4px;
+}
+
+.st-sort-ascent:before {
+    content: '\25B2';
+}
+
+.st-sort-descent:before {
+    content: '\25BC';
+}
+
+.lr-drop-target-before{
+  border-left: 2px solid orange;
+}
+
+.lr-drop-target-after{
+  border-right: 2px solid orange;
+}
 
 .navbar {
     margin-bottom: 10px;

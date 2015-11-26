@@ -2,7 +2,7 @@
  * Angular Material Design
  * https://github.com/angular/material
  * @license MIT
- * v1.0.0-rc1-master-325d83e
+ * v1.0.0-rc3-master-3ab6aa3
  */
 goog.provide('ng.material.components.input');
 goog.require('ng.material.core');
@@ -65,6 +65,7 @@ function mdInputContainerDirective($mdTheming, $parse) {
 
   function postLink(scope, element, attr) {
     $mdTheming(element);
+    if (element.find('md-icon').length) element.addClass('md-has-icon');
   }
 
   function ContainerCtrl($scope, $element, $attrs) {

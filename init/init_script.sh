@@ -67,7 +67,7 @@ then
     # check if already run redis
     REDISCONF=$PROJECTPTH'/init/redis.conf'
     PRIORREDIS=$(pgrep redis)
-    if [ "$PRIORREDIS"]
+    if [ "$PRIORREDIS" ]
     then
         echo "Starting local redis server with conf $REDISCONF"
         /usr/local/bin/redis-server $REDISCONF

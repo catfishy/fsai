@@ -23,7 +23,9 @@ def crawlBRPlayerPosition(pid, player_name):
     player_name_parts = [_.lower().replace('.','').strip() for _ in player_name.split(' ')]
     if player_name_parts[-1] == 'jr':
         player_name_parts = player_name_parts[:-1]
-    player_search = '+'.join(player_name_parts)
+    last_initial = player_name_parts[-1][0]
+    player_search = '+'.join(player_name_parts[:-1] + [last_initial])
+    
     url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
     print url
     links = getAllLinks(url)
@@ -204,7 +206,7 @@ def crawlNBARoster(years=None):
     return True
 
 
-def crawlNBAGames(date_start,date_end):
+def crawlNBAGames(date_start,date_end, recrawl=True):
     date_start = datetime.strptime(date_start, '%m/%d/%Y')
     date_end = datetime.strptime(date_end, "%m/%d/%Y")
     pool = mp.Pool(processes=12)
@@ -226,6 +228,11 @@ def crawlNBAGames(date_start,date_end):
             for i, g in games.iterrows():
                 gid = g['GAME_ID']
                 season = g['SEASON']
+                if not recrawl:
+                    # check if already crawled
+                    db_row = nba_conn.findByID(nba_games_collection, str(gid).zfill(10))
+                    if db_row:
+                        continue
                 to_yield = (gid, date, season)
                 yield to_yield
     print date_start
@@ -356,15 +363,23 @@ def crawlNBAGameData(args):
 def findNBAPlayer(pid, crawl=True):
     query = {"_id": pid}
     result = nba_conn.findOne(nba_players_collection, query=query)
+    
     if bool(result):
-        return result
-    elif crawl:
+        br_pos = result['BR_POSITION']
+        pos = result['POSITION']
+        if len(pos) > 0 and len(br_pos) > 0:
+            return result
+        else:
+            print 'PLAYER ROW FOUND, BUT NO POSITION: %s, %s, %s' % (pid, pos, br_pos)
+    if crawl:
         crawled = crawlNBAPlayer(pid)
         if crawled:
             result = nba_conn.findOne(nba_players_collection, query=query)
-            if bool(result):
-                return result
-    raise Exception("Could not find player %s" % pid)
+    
+    if bool(result):
+        return result
+    else:
+        raise Exception("Could not find player %s" % pid)
 
 def findNBATeam(tid, year, crawl=True):
     query = {"team_id": tid, "season": int(year)}
@@ -565,7 +580,6 @@ def crawlNBAShotChart(PID, year):
                     "VsDivision=&mode=Advanced&showDetails=0&showShots=1&showZones=0")
     Season = createSeasonKey(year)
     shot_chart_url = url_template % (Season, PID, Season)
-    print shot_chart_url
     resultsets = turnJSONtoPD(shot_chart_url)
     shot_df = resultsets.get("Shot_Chart_Detail")
     if shot_df is None or shot_df.size == 0:
@@ -593,7 +607,6 @@ def crawlNBAShot(PID, year):
                     "SeasonType=Regular+Season&TeamID=0&VsConference=&VsDivision=")
     Season = createSeasonKey(year)
     shot_chart_url = url_template % (PID, Season)
-    print shot_chart_url
     resultsets = turnJSONtoPD(shot_chart_url)
     shot_df = resultsets.get("PtShotLog")
     if shot_df is None or shot_df.size == 0:
@@ -627,7 +640,6 @@ def crawlNBADefense(PID, year):
                     "TeamID=0&VsConference=&VsDivision=")
     Season = createSeasonKey(year)
     shot_chart_url = url_template % (PID, Season)
-    print shot_chart_url
     resultsets = turnJSONtoPD(shot_chart_url)
     data = {k:v.to_json() for k,v in resultsets.iteritems() if v.size > 0}
     if len(data) == 0:
@@ -650,7 +662,6 @@ def crawlNBARebound(PID, year):
                     "TeamID=0&VsConference=&VsDivision=")
     Season = createSeasonKey(year)
     shot_chart_url = url_template % (PID, Season)
-    print shot_chart_url
     resultsets = turnJSONtoPD(shot_chart_url)
     
     data = {k:v.to_json() for k,v in resultsets.iteritems() if v.size > 0}
@@ -673,7 +684,6 @@ def crawlNBAPass(PID, year):
                     "SeasonSegment=&SeasonType=Regular+Season&TeamID=0&VsConference=&VsDivision=")
     Season = createSeasonKey(year)
     shot_chart_url = url_template % (PID, Season)
-    print shot_chart_url
     resultsets = turnJSONtoPD(shot_chart_url)
 
     data = {k:v.to_json() for k,v in resultsets.iteritems() if v.size > 0}

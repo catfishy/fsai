@@ -3,6 +3,7 @@
 
     angular
         .module('fsai', [
+          'lrDragNDrop',
           'ngMaterial',
           'ngAnimate',
           'smart-table',
@@ -21,6 +22,9 @@
 
     angular
         .module('fsai.config', []);
+
+    angular
+        .module('fsai.fixedHeader', []);
 
     angular
         .module('fsai')

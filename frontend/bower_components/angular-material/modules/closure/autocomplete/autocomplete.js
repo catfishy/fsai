@@ -2,7 +2,7 @@
  * Angular Material Design
  * https://github.com/angular/material
  * @license MIT
- * v1.0.0-rc1-master-325d83e
+ * v1.0.0-rc3-master-3ab6aa3
  */
 goog.provide('ng.material.components.autocomplete');
 goog.require('ng.material.components.icon');
@@ -274,6 +274,7 @@ function MdAutocompleteCtrl ($scope, $element, $mdUtil, $mdConstant, $mdTheming,
    * When the user's mouse leaves the menu, blur events may hide the menu again.
    */
   function onListLeave () {
+    if (!hasFocus) elements.input.focus();
     noBlur = false;
     ctrl.hidden = shouldHide();
   }
@@ -381,8 +382,8 @@ function MdAutocompleteCtrl ($scope, $element, $mdUtil, $mdConstant, $mdTheming,
    * Handles input blur event, determines if the dropdown should hide.
    */
   function blur () {
+    hasFocus = false;
     if (!noBlur) {
-      hasFocus = false;
       ctrl.hidden = shouldHide();
     }
   }
@@ -392,7 +393,10 @@ function MdAutocompleteCtrl ($scope, $element, $mdUtil, $mdConstant, $mdTheming,
    * @param forceBlur
    */
   function doBlur(forceBlur) {
-    if (forceBlur) noBlur = false;
+    if (forceBlur) {
+      noBlur = false;
+      hasFocus = false;
+    }
     elements.input.blur();
   }
 
@@ -430,13 +434,17 @@ function MdAutocompleteCtrl ($scope, $element, $mdUtil, $mdConstant, $mdTheming,
         updateMessages();
         break;
       case $mdConstant.KEY_CODE.TAB:
+        // If we hit tab, assume that we've left the list so it will close
+        onListLeave();
+
         if (ctrl.hidden || ctrl.loading || ctrl.index < 0 || ctrl.matches.length < 1) return;
         select(ctrl.index);
         break;
       case $mdConstant.KEY_CODE.ENTER:
+        if (ctrl.hidden || ctrl.loading || ctrl.index < 0 || ctrl.matches.length < 1) return;
+        if (hasSelection()) return;
         event.stopPropagation();
         event.preventDefault();
-        if (ctrl.hidden || ctrl.loading || ctrl.index < 0 || ctrl.matches.length < 1) return;
         select(ctrl.index);
         break;
       case $mdConstant.KEY_CODE.ESCAPE:
@@ -519,11 +527,10 @@ function MdAutocompleteCtrl ($scope, $element, $mdUtil, $mdConstant, $mdTheming,
    * @returns {boolean}
    */
   function shouldHide () {
-    if ((ctrl.loading && !hasMatches()) || hasSelection() || !hasFocus) {
-      return true;
-    }
-
-    return !shouldShow();
+    if (ctrl.loading && !hasMatches()) return true; // Hide while loading initial matches
+    else if (hasSelection()) return true;           // Hide if there is already a selection
+    else if (!hasFocus) return true;                // Hide if the input does not have focus
+    else return !shouldShow();                      // Defer to standard show logic
   }
 
   /**
@@ -722,7 +729,7 @@ function MdAutocompleteCtrl ($scope, $element, $mdUtil, $mdConstant, $mdTheming,
    * results first, then forwards the process to `fetchResults` if necessary.
    */
   function handleQuery () {
-    var searchText = $scope.searchText,
+    var searchText = $scope.searchText || '',
         term       = searchText.toLowerCase();
     //-- if results are cached, pull in cached results
     if (!$scope.noCache && cache[ term ]) {
@@ -907,9 +914,8 @@ function MdAutocomplete () {
           leftover        = element.html(),
           tabindex        = attr.tabindex;
 
-      if (noItemsTemplate) {
-        hasNotFoundTemplate = true;
-      }
+      // Set our variable for the link function above which runs later
+      hasNotFoundTemplate = noItemsTemplate ? true : false;
 
       if (attr.hasOwnProperty('tabindex')) {
         element.attr('tabindex', '-1');
@@ -927,15 +933,15 @@ function MdAutocomplete () {
           <md-virtual-repeat-container\
               md-auto-shrink\
               md-auto-shrink-min="1"\
+              ng-mouseenter="$mdAutocompleteCtrl.listEnter()"\
+              ng-mouseleave="$mdAutocompleteCtrl.listLeave()"\
+              ng-mouseup="$mdAutocompleteCtrl.mouseUp()"\
               ng-hide="$mdAutocompleteCtrl.hidden"\
               class="md-autocomplete-suggestions-container md-whiteframe-z1"\
               role="presentation">\
             <ul class="md-autocomplete-suggestions"\
                 ng-class="::menuClass"\
-                id="ul-{{$mdAutocompleteCtrl.id}}"\
-                ng-mouseenter="$mdAutocompleteCtrl.listEnter()"\
-                ng-mouseleave="$mdAutocompleteCtrl.listLeave()"\
-                ng-mouseup="$mdAutocompleteCtrl.mouseUp()">\
+                id="ul-{{$mdAutocompleteCtrl.id}}">\
               <li md-virtual-repeat="item in $mdAutocompleteCtrl.matches"\
                   ng-class="{ selected: $index === $mdAutocompleteCtrl.index }"\
                   ng-click="$mdAutocompleteCtrl.select($index)"\

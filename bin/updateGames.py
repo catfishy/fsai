@@ -8,6 +8,7 @@ from statsETL.bball.NBAcrawler import crawlUpcomingGames, crawlNBAGames, crawlNB
 DAYS_AHEAD = 10
 DAYS_BEHIND = 20
 YEARS = [2015]
+RECRAWL= True
 
 if __name__ == "__main__":
 
@@ -18,10 +19,13 @@ if __name__ == "__main__":
     # crawl behind
     today = datetime.now()
     start = today - timedelta(days=DAYS_BEHIND)
-    crawlNBAGames(start.strftime("%m/%d/%Y"),today.strftime("%m/%d/%Y"))
+    crawlNBAGames(start.strftime("%m/%d/%Y"),today.strftime("%m/%d/%Y"), recrawl=RECRAWL)
 
     # crawl player data (shot charts)
     crawlNBAPlayerData(years=YEARS, last_n_days=DAYS_BEHIND)
 
-    # crawl depth chart
+    # crawl rosters
     crawlNBARoster()
+
+    # clear cache items for old games
+    

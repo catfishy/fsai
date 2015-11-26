@@ -152,6 +152,8 @@ nba_team_vectors_collection = nba_conn.getCollection("nba_team_vectors")
 nba_player_vectors_collection = nba_conn.getCollection("nba_player_vectors")
 nba_against_vectors_collection = nba_conn.getCollection("nba_against_vectors")
 nba_split_vectors_collection = nba_conn.getCollection("nba_split_vectors")
+# util tables
+nba_stat_ranges_collection = nba_conn.getCollection("nba_stat_ranges")
 
 # indices
 nba_conn.ensureIndex(nba_teams_collection, [("team_id", 1),("season", 1)], unique=True)
@@ -172,6 +174,7 @@ nba_conn.ensureIndex(nba_season_averages_collection, [("date", 1), ("team_id", 1
 nba_conn.ensureIndex(nba_player_vectors_collection, [("date", 1), ("player_id", 1), ("game_id",1), ("team_id",1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_against_vectors_collection, [("game_id", 1), ("team_id", 1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_split_vectors_collection, [("date", 1), ("player_id", 1)], unique=True)
+nba_conn.ensureIndex(nba_stat_ranges_collection, [("date", 1),("vector_type", 1)], unique=True)
 
 
 def getGameData(game_id):

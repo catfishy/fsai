@@ -21,7 +21,8 @@
     * @desc The Factory to be returned
     */
     var NBAStats = {
-      getTeamStats: getTeamStats
+      getTeamStats: getTeamStats,
+      getPlayerStats: getPlayerStats
     };
 
     return NBAStats;

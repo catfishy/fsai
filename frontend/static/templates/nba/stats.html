@@ -56,25 +56,34 @@
     </md-tabs>
 </div>
 
-<div class="animated slideInLeft" ng-show="vm.focused" class="col-xs-12" id="nba_stats_table">
-  <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="table table-striped">
+<div class="statsTable animated slideInLeft col-xs-12" ng-show="vm.focused">
+  <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="table table-striped tableSection" id="nba_stats_table">
     <thead>
       <tr>
-        <th ng-repeat="header in vm.displayed_headers" st-sort="'{{header.key}}'">{{header.name}}</th>
+
+          <th class="statCell" lr-drag-src="headers" lr-drop-target="headers" ng-repeat="header in vm.displayed_headers" st-sort="{{header.key}}.v">
+            <div style="width: 75px;">{{header.name}}</div>
+            <!--<input class="form-control input-mini" st-search="{{header.key}}" placeholder="{{header.name}}"/>-->
+          </th>
       </tr>
     </thead>
     <tbody>
       <tr ng-repeat="row in vm.displayed_rows">
-        <td ng-repeat="header in vm.displayed_headers">{{row[header.key]}}</td>
+        <td class="statCell" ng-repeat="header in vm.displayed_headers">
+          <div style="width: 75px;" ng-style="{color: row[header.key].c}">{{row[header.key].v}}</div>
+        </td>
       </tr>
     </tbody>
     <tfoot>
+      <!--
       <tr>
         <td colspan="5" class="text-center">
-          <div st-pagination="" st-items-by-page="vm.itemsByPage" st-displayed-pages="7"></div>
+          <div st-pagination="" st-items-by-page="vm.itemsByPage" st-displayed-pages="10"></div>
         </td>
       </tr>
+      -->
     </tfoot>
   </table>
 </div>
+
 

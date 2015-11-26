@@ -24,12 +24,12 @@
 
     vm.startdate = undefined;
     vm.enddate = undefined;
-    vm.stats_type = "Team";
+    vm.stats_type = "Player";
     
     vm.team_statstypes = ['windowed', 'opponent', 'season', 'meta'];
     vm.player_statstypes = ['windowed', 'opponent_pos', 'trend_pos', 'exponential', 'homeroadsplit', 'oppsplit', 'meta'];
 
-    vm.itemsByPage = 20
+    vm.itemsByPage = 100
     vm.loading = false;
     vm.loaded = false;
     vm.focused = false;
@@ -39,6 +39,8 @@
     vm.displayed_page = undefined;
     vm.displayed_headers = [];
     vm.displayed_rows = [];
+
+    vm.color = "#FF0000";
 
     vm.canceler = undefined;
 
