@@ -67,7 +67,7 @@ class RedisTTLCachePolicy:
     Potentially variable by object being cached
     """
     def __init__(self, default_ttl=3600):
-        self.default_ttl = 3600
+        self.default_ttl = default_ttl
 
     def getTTL(self, object_being_cached):
         return self.default_ttl
@@ -90,12 +90,12 @@ class RedisTTLCache(dict):
     WARNING: NOT A PROPER DICT SUBCLASS. 
 
     """
-    def __init__(self, cache_name, ttl_policy=None, connection=None):
+    def __init__(self, cache_name, ttl_policy=3600*24*30, connection=None):
         self.connection = connection if connection else getRedisCache()
         if ttl_policy and isinstance(ttl_policy, RedisTTLCachePolicy):
             self.ttl_policy = ttl_policy
         else:
-            self.ttl_policy = None
+            self.ttl_policy = RedisTTLCachePolicy(default_ttl = ttl_policy)
         self.cache_name = cache_name
 
     def _getKeyName(self, key):

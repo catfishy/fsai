@@ -106,14 +106,12 @@ class MongoConn:
 # get nba db conn
 nba_conn = MongoConn(db=NBA_DB)
 
-# old
+# deprecate
+'''
 upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
 advanced_collection = nba_conn.getCollection("advanced")
 onoff_collection = nba_conn.getCollection("onoff")
 two_man_collection = nba_conn.getCollection("two_man")
-
-# deprecate
-'''
 espn_stat_collection = nba_conn.getCollection("espnstats") # for espn team stats
 espn_player_stat_collection = nba_conn.getCollection("espnplayerstats")
 game_collection = nba_conn.getCollection("games")
@@ -121,7 +119,6 @@ player_collection = nba_conn.getCollection("players")
 player_game_collection = nba_conn.getCollection("player_games")
 team_game_collection = nba_conn.getCollection("team_games")
 
-nba_conn.ensureIndex(team_collection, [("url", 1)])
 nba_conn.ensureIndex(player_collection, [("url", 1)])
 nba_conn.ensureIndex(player_collection, [("nba_id", 1)])
 nba_conn.ensureIndex(team_game_collection, [("team_id", 1)])
@@ -133,6 +130,10 @@ nba_conn.ensureIndex(team_game_collection, [("team_id", 1),("game_id", 1)], uniq
 nba_conn.ensureIndex(player_game_collection, [("player_id", 1),("game_id", 1)], unique=True)
 nba_conn.ensureIndex(espn_stat_collection, [('time', 1)], unique=True)
 nba_conn.ensureIndex(espn_player_stat_collection, [("player_id", 1),('time', 1)], unique=True)
+nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
+nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
+nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)
+
 '''
 
 # current
@@ -152,15 +153,15 @@ nba_team_vectors_collection = nba_conn.getCollection("nba_team_vectors")
 nba_player_vectors_collection = nba_conn.getCollection("nba_player_vectors")
 nba_against_vectors_collection = nba_conn.getCollection("nba_against_vectors")
 nba_split_vectors_collection = nba_conn.getCollection("nba_split_vectors")
+nba_player_outputs_collection = nba_conn.getCollection("nba_player_outputs")
+nba_team_outputs_collection = nba_conn.getCollection("nba_team_outputs")
+
 # util tables
 nba_stat_ranges_collection = nba_conn.getCollection("nba_stat_ranges")
 
 # indices
 nba_conn.ensureIndex(nba_teams_collection, [("team_id", 1),("season", 1)], unique=True)
 nba_conn.ensureIndex(depth_collection, [("team_id", 1),("season", 1)], unique=True)
-nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
-nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
-nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)
 nba_conn.ensureIndex(shot_chart_collection, [("player_id", 1),("game_id", 1),("time", 1)], unique=True)
 nba_conn.ensureIndex(shot_chart_collection, [("game_id", 1)])
 nba_conn.ensureIndex(shot_collection, [("player_id", 1),("game_id", 1),("time", 1)], unique=True)
@@ -175,7 +176,8 @@ nba_conn.ensureIndex(nba_player_vectors_collection, [("date", 1), ("player_id", 
 nba_conn.ensureIndex(nba_against_vectors_collection, [("game_id", 1), ("team_id", 1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_split_vectors_collection, [("date", 1), ("player_id", 1)], unique=True)
 nba_conn.ensureIndex(nba_stat_ranges_collection, [("date", 1),("vector_type", 1)], unique=True)
-
+nba_conn.ensureIndex(nba_player_outputs_collection, [("game_id", 1),("player_id", 1), ("window", 1)], unique=True)
+nba_conn.ensureIndex(nba_team_outputs_collection, [("game_id", 1),("team_id", 1), ("window", 1)], unique=True)
 
 def getGameData(game_id):
     row = espn_games_collection.find_one({"_id": game_id})

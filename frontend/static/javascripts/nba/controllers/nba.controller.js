@@ -26,21 +26,17 @@
     vm.enddate = undefined;
     vm.stats_type = "Player";
     
-    vm.team_statstypes = ['windowed', 'opponent', 'season', 'meta'];
-    vm.player_statstypes = ['windowed', 'opponent_pos', 'trend_pos', 'exponential', 'homeroadsplit', 'oppsplit', 'meta'];
+    vm.itemsByPage = 100;
 
-    vm.itemsByPage = 100
     vm.loading = false;
     vm.loaded = false;
     vm.focused = false;
 
-    vm.stat_headers = {};
+    vm.stat_headers = [];
     vm.stat_rows = {};
     vm.displayed_page = undefined;
     vm.displayed_headers = [];
     vm.displayed_rows = [];
-
-    vm.color = "#FF0000";
 
     vm.canceler = undefined;
 
@@ -60,7 +56,8 @@
     }
 
     function linkDisplayed(key) {
-      vm.displayed_headers = [].concat(vm.stat_headers[key]);
+      vm.displayed_headers = [].concat(vm.stat_headers);
+      vm.displayed_rows = [].concat(vm.stat_rows[key]);
       vm.displayed_page = key;
     }
 
@@ -68,13 +65,12 @@
       vm.loading = false;
       vm.loaded = false;
       vm.focused = false;
+      vm.empty = false;
     }
 
     function slideInNewTable(key) {
-      vm.loading = false;
       linkDisplayed(key);
-      vm.loaded = true;
-      vm.focused = true;
+      slideInLoaded();
     }
 
     function slideInNewPage(key) {
@@ -82,20 +78,28 @@
       if (key == vm.displayed_page) {
         return;
       }
-      vm.loading = true;
-      vm.loaded = false;
-      vm.focused = false;
+      slideInLoading();
       linkDisplayed(key);
+      slideInLoaded();
+
+    }
+
+    function slideInLoaded() {
       vm.loading = false;
       vm.loaded = true;
       vm.focused = true;
-
+      vm.empty = false;
     }
 
     function slideInLoading() {
       vm.loading = true;
       vm.loaded = false;
       vm.focused = false;
+      vm.empty = false;
+    }
+
+    function slideInEmpty() {
+      clearPage();
     }
 
     function populateStats() {
@@ -117,13 +121,16 @@
 
     function populatePlayerStats() {
       vm.canceler = $q.defer();
-      NBAStats.getPlayerStats(vm.startdate, vm.enddate, vm.player_statstypes, vm.canceler)
+      NBAStats.getPlayerStats(vm.startdate, vm.enddate, vm.canceler)
         .success(function(response, status, headers, config){
           var response_dict = JSON.parse(response);
-          vm.stat_headers = response_dict['headers'];
-          vm.stat_rows = response_dict['rows'];
-          vm.displayed_rows = [].concat(vm.stat_rows);
-          slideInNewTable('windowed');
+          if (response_dict['rows'].length == 0) {
+            slideInEmpty();
+          } else {
+            vm.stat_headers = response_dict['headers'];
+            vm.stat_rows = response_dict['rows'];
+            slideInNewPage('G');
+          }
           vm.canceler = undefined;
         })
         .error(function(response, status, headers, config) {
@@ -138,13 +145,16 @@
 
     function populateTeamStats() {
       vm.canceler = $q.defer();
-      NBAStats.getTeamStats(vm.startdate, vm.enddate, vm.team_statstypes, vm.canceler)
+      NBAStats.getTeamStats(vm.startdate, vm.enddate, vm.canceler)
         .success(function(response, status, headers, config){
           var response_dict = JSON.parse(response);
-          vm.stat_headers = response_dict['headers'];
-          vm.stat_rows = response_dict['rows'];
-          vm.displayed_rows = [].concat(vm.stat_rows);
-          slideInNewTable('windowed');
+          if (response_dict['rows'].length == 0) {
+            slideInEmpty();
+          } else {
+            vm.stat_headers = response_dict['headers'];
+            vm.stat_rows = response_dict['rows'];
+            slideInNewPage('ALL');
+          }
           vm.canceler = undefined;
         })
         .error(function(response, status, headers, config) {

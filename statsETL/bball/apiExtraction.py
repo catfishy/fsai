@@ -22,7 +22,74 @@ from statsETL.db.mongolib import *
 TEAM_REDIS_CACHE = RedisTTLCache('teamapi')
 PLAYER_REDIS_CACHE = RedisTTLCache('playerapi')
 PLAYER_TYPES_ALLOWED = ['windowed', 'opponent_pos', 'trend_pos', 'exponential', 'homeroadsplit', 'oppsplit', 'meta']
-TEAM_TYPES_ALLOWED = ['windowed', 'meta', 'season', 'opponent']
+TEAM_TYPES_ALLOWED = ['windowed', 'meta', 'season']
+REVERSED = ['TO',
+            'TM_TOV_PCT',
+            'DFGA',
+            'DFG_PCT',
+            'OPP_FTA_RATE',
+            'OPP_PTS_FB',
+            'OPP_EFG_PCT',
+            'OPP_OREB_PCT',
+            'OPP_PTS_PAINT',
+            'OPP_PTS_2ND_CHANCE',
+            'OPP_PTS_OFF_TOV',
+            'DFGM',
+            'PCT_TOV',
+            'PCT_PF'];
+
+'''
+Specifies which stat categories to query for, given a request type
+'''
+PLAYER_STAT_TYPE = {'basic': ['exponential','meta'],
+                    'matchup': ['exponential','opponent_pos','trend_pos','homeroadsplit','oppsplit']}
+TEAM_STAT_TYPE = {'basic': ['windowed','meta'],
+                  'matchup': ['windowed','season']}
+
+'''
+Specifies which stats to return, given a request type
+'''
+BASIC_STAT_TYPE_KEYS = [('gid','GAME'),
+                        ('tid','TEAM'),
+                        ('pid','PLAYER'),
+                        ('home/road','HOME/ ROAD'),
+                        ('positions','POS'),
+                        ('days_rest','REST'),
+                        ('MIN','MIN'),
+                        ('USG_PCT','USG%'),
+                        ('PIE','PIE'),
+                        ('TCHS','TOUCH'),
+                        ('PTS','PTS'),
+                        ('REB','REB'),
+                        ('AST','AST'),
+                        ('PASS','PASS'),
+                        ('TO','TO'),
+                        ('STL','STL'),
+                        ('BLK','BLK'),
+                        ('BLKA','BLKA'),
+                        ('REB_PCT','REB%'),
+                        ('AST_RATIO','AST RATIO'),
+                        ('FGA','FGA'),
+                        ('TS_PCT','TS%'),
+                        ('FG3A','FG3A'),
+                        ('FG3_PCT','FG3%'),
+                        ('FTA_RATE','FTA RATE'),
+                        ('FT_PCT','FT%'),
+                        ('PCT_FGA','%FGA'),
+                        ('PCT_FGM','%FGM'),
+                        ('PCT_FG3A','%FG3M'),
+                        ('PCT_FG3M','%FG3M'),
+                        ('PCT_FTA','%FTA'),
+                        ('PCT_FTM','%FTM'),
+                        ('PCT_REB','%REB'),
+                        ('PCT_AST','%AST'),
+                        ('PCT_TOV','%TO'),
+                        ('PCT_STL','%STL'),
+                        ('PCT_PFD','%PFD'),
+                        ('PCT_BLK','%BLK'),
+                        ('PCT_BLKA','%BLKA'),
+                        ('PCT_PTS','%PTS')]
+MATCHUP_STAT_TYPE_KEYS = []
 
 class colorExtractor(object):
 
@@ -89,24 +156,45 @@ class colorExtractor(object):
             return True
         return False
 
-    def extractColor(self, key, value, reverse=False):
+    def extractColor(self, key, value):
+        # default transparent
         if key not in self.colorRange:
-            return '#000000'
+            return 'transparent'
+
+        # determine reversal
+        key_parts = key.split('_')
+        prefix = key_parts[0]
+        nonprefix_key = '_'.join(key_parts[1:])
+        if nonprefix_key in REVERSED:
+            reversed = True
+        else:
+            reversed = False
+
+        # in case there is a whole stat type where ranks are flipped
+        '''
+        if 'opponent' == prefix:
+            reversed = not reversed
+        '''
+        # get range and clamp
         minval, maxval = tuple(self.colorRange[key])
-        if value <= minval:
+        if value <= minval: 
             fraction = 0.0
         elif value >= maxval:
             fraction = 1.0
         else:
             fraction = (value-minval)/(maxval-minval)
 
-        if reverse:
+        # reverse if necessary
+        if reversed:
             fraction = 1.0 - fraction
+
+        # determine colors based on fraction
         color_scale = int(fraction*255*2)
         if color_scale > 255:
             r,g,b = (255*2-color_scale,255,0)
         else:
             r,g,b = (255,color_scale,0)
+
         # to hex
         hex_color = '#%02x%02x%02x' % (r,g,b)
         return hex_color
@@ -142,30 +230,22 @@ class APIExtractor(object):
             pass
         return False
 
-    def fillDataRow(self, prefix, key_names, stats):
+    def fillDataRow(self, prefix, stats):
         row = {}
-        keys = dict(key_names).keys()
         for k,v in stats.iteritems():
-            if k not in keys:
-                continue
             if APIExtractor.is_nan(v):
                 row['%s_%s' % (prefix,k)] = 'NaN'
             else:
                 row['%s_%s' % (prefix,k)] = v
         return row
 
-    def refreshAPICacheValue(self, cache, key, header, row):
+    def refreshAPICacheValue(self, cache, key, row):
         try:
             item = cache[key]
             if item is None:
                 item = {}
-            for k in header.keys():
-                if k in item:
-                    item[k]['headers'] = header[k]
-                    item[k]['row'] = row[k]
-                else:
-                    item[k] = {'headers': header[k],
-                               'row': row[k]}
+            for k,v in row.iteritems():
+                item[k] = v
             cache[key] = item
             return True
         except Exception as e:
@@ -175,76 +255,12 @@ class APIExtractor(object):
 
 class TeamAPIExtractor(APIExtractor):
 
-    KEY_NAMES = [('NET_RATING','Net Rating'),
-                 ('PLUS_MINUS','+/-'),
-                 ('PACE','Pace'),
-                 ('PIE','PIE'),
-                 ('PTS','Points'),
-                 ('PTS_PAINT','Pts In Paint'),
-                 ('PTS_OFF_TOV','Pts Off TO'),
-                 ('PTS_FB','PTS_FB'),
-                 ('PTS_2ND_CHANCE','2nd Chance Pts.'),
-                 ('STL','Steals'),
-                 ('PASS','Passes'),
-                 ('AST','Assists'),
-                 ('SAST','Secondary AST'),
-                 ('AST_RATIO','AST_RATIO'),
-                 ('AST_PCT','AST%'),
-                 ('AST_TOV','AST_TOV'),
-                 ('TO','TO'),
-                 ('TM_TOV_PCT','TOV%'),
-                 ('FTA','FTA'),
-                 ('FT_PCT','FT%'),
-                 ('FTA_RATE','FTA_RATE'),
-                 ('FTAST','FTAST'),
-                 ('FGA','FGA'),
-                 ('FG_PCT','FG%'),
-                 ('DFGA','DFGA'),
-                 ('DFG_PCT','DFG%'),
-                 ('FG3A','FG3A'),
-                 ('FG3_PCT','FG3%'),
-                 ('TS_PCT','TS%'),
-                 ('EFG_PCT','EFG%'),
-                 ('UFGA','Unassisted FGA'),
-                 ('UFG_PCT','Unassisted FG%'),
-                 ('CFGA','Contested FGA'),
-                 ('CFG_PCT','Contested FG%'),
-                 ('REB','REB'),
-                 ('REB_PCT','REB%'),
-                 ('DREB','DREB'),
-                 ('DREB_PCT','DREB%'),
-                 ('OREB','OREB'),
-                 ('OREB_PCT','OREB%'),
-                 ('BLK','BLK'),
-                 ('BLKA','BLKA'),
-                 ('PCT_FGA_2PT','PCT_FGA_2PT'),
-                 ('PCT_FGA_3PT','PCT_FGA_3PT'),
-                 ('PCT_AST_2PM','PCT_AST_2PM'),
-                 ('PCT_AST_3PM','PCT_AST_3PM'),
-                 ('PCT_UAST_2PM','PCT_UAST_2PM'),
-                 ('PCT_UAST_3PM','PCT_UAST_3PM'),
-                 ('PCT_PTS_PAINT','PCT_PTS_PAINT'),
-                 ('PCT_PTS_2PT','PCT_PTS_2PT'),
-                 ('PCT_PTS_3PT','PCT_PTS_3PT'),
-                 ('PCT_PTS_FT','PCT_PTS_FT'),
-                 ('PCT_PTS_OFF_TOV','PCT_PTS_OFF_TOV'),
-                 ('PCT_PTS_FB','PCT_PTS_FB'),
-                 ('PCT_PTS_2PT_MR','PCT_PTS_2PT_MR'),
-                 ('OPP_FTA_RATE','OPP_FTA_RATE'),
-                 ('OPP_PTS_FB','OPP_PTS_FB'),
-                 ('OPP_EFG_PCT','OPP eFG%'),
-                 ('OPP_OREB_PCT','OPP_OREB_PCT'),
-                 ('OPP_PTS_PAINT','OPP_PTS_PAINT'),
-                 ('OPP_PTS_2ND_CHANCE','OPP 2nd Chance Pts'),
-                 ('OPP_TOV_PCT','OPP TOV%'),
-                 ('OPP_PTS_OFF_TOV','OPP Pts Off TOV')]
-
     @classmethod
     def generateCacheKey(cls, tid, gid):
         return '%s%s' % (tid, gid)
 
     @classmethod
-    def getAPIResponseFromCache(cls, arg, types):
+    def getAPIResponseFromCache(cls, arg):
         tid, gid = arg
         key = cls.generateCacheKey(tid, gid)
         item = TEAM_REDIS_CACHE[key]
@@ -259,88 +275,48 @@ class TeamAPIExtractor(APIExtractor):
                'tid': abbr}
         return row
 
-    def fillHeader(self, prefix, key_names):
-        header = [{'key': 'gid', 'name': 'GAME'},
-                  {'key': 'tid', 'name': 'TEAM'}]
-        header += [{'key': '%s_%s' % (prefix,k), 'name': n} for k,n in key_names]
-        return header
-
     def extractMetaVector(self, vector):
-        key_names = [('home/road','Home/Road'),
-                     ('location','Location'),
-                     ('days_rest','Days Rest')]
-        prefix = 'meta'
-        header = self.fillHeader(prefix, key_names)
-        row = self.fillBasicRow(vector)
+        stats = {}
         try:
             stats = {'days_rest': vector.days_rest,
-                     'location': vector.input['location'],
-                     'home/road': vector.input['home/road']}
+                     'location': vector.location,
+                     'home/road': vector.homeroad}
         except Exception as e:
             print "Meta Vector Exception: %s" % e
-            stats = {'days_rest': np.nan,
-                     'location': np.nan,
-                     'home/road': np.nan}
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row = self.fillBasicRow(vector)
+        row.update(self.fillDataRow('meta', stats))
+        return row
 
     def extractSeasonVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'season'
-        header = self.fillHeader(prefix, key_names)
+        stats = {}
         try:
-            stats = vector.season_stats['means'].ix['mean'].to_dict()
+            stats = vector.season_stats.loc['means'].to_dict()
         except Exception as e:
             print "Season Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
-
-    def extractOppVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'opponent'
-        header = self.fillHeader(prefix, key_names)
-        try:
-            stats = vector.input['means_opp'].ix['mean'].to_dict()
-        except Exception as e:
-            print "Opp Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
-        row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('season', stats))
+        return row
 
     def extractWindowVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'windowed'
-        header = self.fillHeader(prefix, key_names)
+        stats = {}
         try:
-            stats = vector.input['means'].ix['mean'].to_dict()
+            stats = vector.input.loc['means'].to_dict()
         except Exception as e:
             print "Window Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('windowed', stats))
+        return row
 
     def extractVectors(self, vector, types, cache=True):
-        whole_header = {}
         whole_row = {}
         try:
             for t in types:
                 if t == 'windowed':
-                    header, row = self.extractWindowVector(vector)
+                    row = self.extractWindowVector(vector)
                 elif t == 'meta':
-                    header, row = self.extractMetaVector(vector)
+                    row = self.extractMetaVector(vector)
                 elif t == 'season':
-                    header, row = self.extractSeasonVector(vector)
-                elif t == 'opponent':
-                    header, row = self.extractOppVector(vector)
-                whole_header[t] = header
+                    row = self.extractSeasonVector(vector)
                 whole_row[t] = row
         except Exception as e:
             traceback.print_exc()
@@ -348,120 +324,24 @@ class TeamAPIExtractor(APIExtractor):
 
         if cache:
             key = TeamAPIExtractor.generateCacheKey(vector.tid, vector.gid)
-            self.refreshAPICacheValue(TEAM_REDIS_CACHE, 
-                                      key, 
-                                      whole_header, 
-                                      whole_row)
+            self.refreshAPICacheValue(TEAM_REDIS_CACHE, key, whole_row)
 
         row_concat = {}
         for row in whole_row.values():
             row_concat.update(row)
         row_concat = TeamAPIExtractor.cleanData(row_concat)
-        return whole_header, row_concat
+
+        return row_concat
 
 
 class PlayerAPIExtractor(APIExtractor):
-
-    KEY_NAMES = [('MIN','MIN'),
-                 ('USG_PCT','USG%'),
-                 ('PTS','PTS'),
-                 ('REB','REB'),
-                 ('AST','AST'),
-                 ('STL','STL'),
-                 ('BLK','BLK'),
-                 ('TO','TO'),
-                 ('FGA','FGA'),
-                 ('FG3A','FG3A'),
-                 ('FTA_RATE','FTA Rate'),
-                 ('FG_PCT','FG%'),
-                 ('DFG_PCT','DFG%'),
-                 ('TS_PCT','TS%'),
-                 ('FT_PCT','FT%'),
-                 ('REB_PCT','REB%'),
-                 ('AST_PCT','AST%'),
-                 ('AST_TOV','AST/TOV'),
-                 ('PTS_PAINT','PTS PAINT'),
-                 ('PTS_OFF_TOV','PTS OFF TOV'),
-                 ('PTS_FB','PTS FB'),
-                 ('PTS_2ND_CHANCE','PTS 2ND CHANCE'),
-                 ('OPP_TOV_PCT','OPP TOV%'),
-                 ('PCT_BLK','%BLK'),
-                 ('PCT_FGA','%FGA'),
-                 ('PCT_AST','%AST'),
-                 ('PCT_STL','%STL'),
-                 ('PCT_REB','%REB'),
-                 ('OFF_RATING','Off Rate'),
-                 ('DEF_RATING','Def Rate'),
-                 ('NET_RATING','Net Rate'),
-                 ('PIE','PIE'),
-                 ('PLUS_MINUS','+/-'),
-                 ('PACE','PACE'),
-                 ('PFD','PFD'),
-                 ('SPD','SPD'),
-                 ('DIST','DIST'),
-                 ('PASS','PASS'),
-                 ('BLKA','BLKA'),
-                 ('EFG_PCT','eFG%'),
-                 ('FG3_PCT','FG3%'),
-                 ('CFGA','CFGA'),
-                 ('CFG_PCT','CFG%'),
-                 ('UFGA','UFGA'),
-                 ('UFG_PCT','UFG%'),
-                 ('FTA','FTA'),
-                 ('FTA_RATE','FTA Rate'),
-                 ('SAST','SAST'),
-                 ('FTAST','FTAST'),
-                 ('AST_RATIO','AST RATIO'),
-                 ('RBC','RBC'),
-                 ('DREB','DREB'),
-                 ('DRBC','DRBC'),
-                 ('DREB_PCT','DREB%'),
-                 ('OREB','OREB'),
-                 ('ORBC','ORBC'),
-                 ('OREB_PCT','OREB%'),
-                 ('DFGA','DFGA'),
-                 ('DFGM','DFGM'),
-                 ('OPP_PTS_OFF_TOV','OPP PTS OFF TOV'),
-                 ('OPP_PTS_2ND_CHANCE','OPP PTS 2ND CHANCE'),
-                 ('OPP_EFG_PCT','OPP eFG%'),
-                 ('OPP_PTS_PAINT','OPP PTS PAINT'),
-                 ('OPP_PTS_FB','OPP PTS FB'),
-                 ('OPP_OREB_PCT','OPP OREB%'),
-                 ('OPP_FTA_RATE','OPP FTA RATE'),
-                 ('PCT_AST_FGM','PCT_AST_FGM'),
-                 ('PCT_DREB','PCT_DREB'),
-                 ('PCT_AST_2PM','PCT_AST_2PM'),
-                 ('PCT_UAST_3PM','PCT_UAST_3PM'),
-                 ('PCT_PTS_FB','PCT_PTS_FB'),
-                 ('PCT_PTS_2PT_MR','PCT_PTS_2PT_MR'),
-                 ('PCT_PTS_FT','PCT_PTS_FT'),
-                 ('PCT_PTS_2PT','PCT_PTS_2PT'),
-                 ('PCT_AST_3PM','PCT_AST_3PM'),
-                 ('PCT_PFD','PCT_PFD'),
-                 ('PCT_PTS_PAINT','PCT_PTS_PAINT'),
-                 ('PCT_UAST_2PM','PCT_UAST_2PM'),
-                 ('PCT_PTS_OFF_TOV','PCT_PTS_OFF_TOV'),
-                 ('PCT_PTS_3PT','PCT_PTS_3PT'),
-                 ('PCT_BLKA','PCT_BLKA'),
-                 ('PCT_FGA_3PT','PCT_FGA_3PT'),
-                 ('PCT_FG3A','PCT_FG3A'),
-                 ('PCT_FG3M','PCT_FG3M'),
-                 ('PCT_PTS','PCT_PTS'),
-                 ('PCT_FGM','PCT_FGM'),
-                 ('PCT_FTM','PCT_FTM'),
-                 ('PCT_FGA_2PT','PCT_FGA_2PT'),
-                 ('PCT_FTA','PCT_FTA'),
-                 ('PCT_TOV','PCT_TOV'),
-                 ('PCT_OREB','PCT_OREB'),
-                 ('PCT_UAST_FGM','PCT_UAST_FGM'),
-                 ('PCT_PF','PCT_PF')]
 
     @classmethod
     def generateCacheKey(cls, pid, tid, gid):
         return '%s%s%s' % (pid, tid, gid)
 
     @classmethod
-    def getAPIResponseFromCache(cls, arg, types):
+    def getAPIResponseFromCache(cls, arg):
         pid, tid, gid = arg
         key = cls.generateCacheKey(pid, tid, gid)
         item = PLAYER_REDIS_CACHE[key]
@@ -477,151 +357,113 @@ class PlayerAPIExtractor(APIExtractor):
                'tid': abbr}
         return row
 
-    def fillHeader(self, prefix, key_names):
-        header = [{'key': 'gid', 'name': 'GAME'},
-                  {'key': 'tid', 'name': 'TEAM'},
-                  {'key': 'pid', 'name': 'PLAYER'}]
-        header += [{'key': '%s_%s' % (prefix,k), 'name': n} for k,n in key_names]
-        return header
-
     def extractMetaVector(self, vector):
-        key_names = [('home/road','Home/Road'),
-                     ('positions','Positions'),
-                     ('location','Location'),
-                     ('days_rest','Days Rest')]
-        prefix = 'meta'
-        header = self.fillHeader(prefix, key_names)
+        stats = {}
         try:
-            stats = {'positions': vector.input['position'],
+            stats = {'positions': '/'.join(vector.input['position']),
                      'days_rest': vector.input['days_rest'],
                      'location': vector.input['location'],
                      'home/road': vector.input['home/road']}
         except Exception as e:
             print "Meta Vector Exception: %s" % e
-            stats = {'positions': np.nan,
-                     'days_rest': np.nan,
-                     'location': np.nan,
-                     'home/road': np.nan}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('meta', stats))
+        return row
 
     def extractWindowVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'windowed'
-        header = self.fillHeader(prefix, key_names)
+        stats = {}
         try:
-            stats = vector.input['means'].ix['mean'].to_dict()
+            stats = vector.input['own'].loc['means'].to_dict()
         except Exception as e:
             print "Window Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('windowed', stats))
+        return row
 
     def extractExponentialVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'exponential'
-        header = self.fillHeader(prefix, key_names)
+        stats = {}
         try:
-            stats = vector.input['expmean'].to_dict()
+            stats = vector.input['own'].loc['expmean'].to_dict()
         except Exception as e:
             print "Exp Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('exponential', stats))
+        return row
 
     def extractOpponentPosVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'opponent_pos'
-        header = self.fillHeader(prefix, key_names)
+        stats = []
         try:
-            stats = [v['mean'].ix['mean'] for k,v in vector.input['against'].iteritems() if v]
+            stats = [v.loc['trend_mean'] for k,v in vector.input['against'].iteritems() if 'trend_mean' in v.index]
+            stats = [_ for _ in stats if _ is not None]
         except Exception as e:
             print "Opp Pos Vector Exception: %s" % e
-            stats = []
-        row = self.fillBasicRow(vector)
         if len(stats) > 0:
             stats_concat = pd.concat(tuple(stats), axis=1)
             stats_mean = dict(stats_concat.mean(axis=1))
         else:
-            stats_mean = {k: np.nan for k,n in key_names}
-        row_data = self.fillDataRow(prefix, key_names, stats_mean)
-        row.update(row_data)
-        return header, row
+            stats_mean = {}
+        row = self.fillBasicRow(vector)
+        row.update(self.fillDataRow('opponent_pos', stats_mean))
+        return row
 
     def extractTrendPosVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'trend_pos'
-        header = self.fillHeader(prefix, key_names)
+        stats = []
         try:
-            stats = [v['mean'].ix['mean'] for k,v in vector.input['trend'].iteritems() if v]
+            stats = [v.loc['mean'] for k,v in vector.input['trend'].iteritems() if 'mean' in v.index]
+            stats = [_ for _ in stats if _ is not None]
         except Exception as e:
             print "Trend Exception: %s" % e
-            stats = []
-        row = self.fillBasicRow(vector)
         if len(stats) > 0:
             stats_concat = pd.concat(tuple(stats), axis=1)
             stats_mean = dict(stats_concat.mean(axis=1))
         else:
-            stats_mean = {k: np.nan for k,n in key_names}
-        row_data = self.fillDataRow(prefix, key_names, stats_mean)
-        row.update(row_data)
-        return header, row
+            stats_mean = {}
+        row = self.fillBasicRow(vector)
+        row.update(self.fillDataRow('trend_pos', stats_mean))
+        return row
 
     def extractHomeRoadSplitVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'homeroadsplit'
-        header = self.fillHeader(prefix, key_names)
-        split_key = 'home_split' if vector.input['home/road'].lower() == 'home' else 'road_split'
+        stats = {}
         try:
-            stats = vector.input['splits'][split_key].ix['mean'].to_dict()
+            cur_game = vector.input['home/road'].lower()
+            if cur_game == 'home':
+                stats = vector.input['splits'].loc['home_split'].to_dict()
+            else:
+                stats = vector.input['splits'].loc['road_split'].to_dict()
         except Exception as e:
             print "Home Road Split Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('homeroadsplit', stats))
+        return row
 
     def extractOppSplitVector(self, vector):
-        key_names = self.KEY_NAMES
-        prefix = 'oppsplit'
-        header = self.fillHeader(prefix, key_names)
+        stats = {}
         try:
-            stats = vector.input['splits']['against_team_split'].ix['mean'].to_dict()
+            stats = vector.input['splits'].loc['against_team_split'].to_dict()
         except Exception as e:
             print "Opp Split Vector Exception: %s" % e
-            stats = {k: np.nan for k,n in key_names}
         row = self.fillBasicRow(vector)
-        row_data = self.fillDataRow(prefix, key_names, stats)
-        row.update(row_data)
-        return header, row
+        row.update(self.fillDataRow('oppsplit', stats))
+        return row
 
     def extractVectors(self, vector, types, cache=True):
-        whole_header = {}
         whole_row = {}
         try:
             for t in types:
                 if t == 'windowed':
-                    header, row = self.extractWindowVector(vector)
+                    row = self.extractWindowVector(vector)
                 elif t == 'exponential':
-                    header, row = self.extractExponentialVector(vector)
+                    row = self.extractExponentialVector(vector)
                 elif t == 'meta':
-                    header, row = self.extractMetaVector(vector)
+                    row = self.extractMetaVector(vector)
                 elif t == 'opponent_pos':
-                    header, row = self.extractOpponentPosVector(vector)
+                    row = self.extractOpponentPosVector(vector)
                 elif t == 'trend_pos':
-                    header, row = self.extractTrendPosVector(vector)
+                    row = self.extractTrendPosVector(vector)
                 elif t == 'homeroadsplit':
-                    header, row = self.extractHomeRoadSplitVector(vector)
+                    row = self.extractHomeRoadSplitVector(vector)
                 elif t == 'oppsplit':
-                    header, row = self.extractOppSplitVector(vector)
-                whole_header[t] = header
+                    row = self.extractOppSplitVector(vector)
                 whole_row[t] = row
         except Exception as e:
             traceback.print_exc()
@@ -629,57 +471,33 @@ class PlayerAPIExtractor(APIExtractor):
 
         if cache:
             key = PlayerAPIExtractor.generateCacheKey(vector.pid, vector.tid, vector.gid)
-            cached = self.refreshAPICacheValue(PLAYER_REDIS_CACHE,key,whole_header,whole_row)
+            cached = self.refreshAPICacheValue(PLAYER_REDIS_CACHE,key,whole_row)
             print "caching: %s, result: %s" % (key,cached)
+
         row_concat = {}
         for row in whole_row.values():
             row_concat.update(row)
         row_concat = PlayerAPIExtractor.cleanData(row_concat)
-        return whole_header, row_concat
+        
+        return row_concat
 
 if __name__ == "__main__":
     from statsETL.bball.statsExtraction import getPlayerVector, getTeamVector
 
-    #arg = (1626170, 1610612752, u'0021500079')
-
-
-    #arg = (201933,1610612746,u"0021500093")
-    arg=(203099,1610612739,'0021500094')
+    arg = (203900, 1610612751, '0021500264')
     pid, tid, gid = arg
-    vector = getPlayerVector(pid, tid, gid, recalculate=True)
-    sys.exit(1)
 
-
+    vector = getPlayerVector(pid, tid, gid, recalculate=False)
     extractor = PlayerAPIExtractor()
-    header, row = extractor.extractVectors(vector, PLAYER_TYPES_ALLOWED, cache=True)
-    print header
-    print row
-    sys.exit(1)
-
-
-    cached_response = PlayerAPIExtractor.getAPIResponseFromCache(arg, PLAYER_TYPES_ALLOWED)
+    row = extractor.extractVectors(vector, PLAYER_TYPES_ALLOWED, cache=True)
+    cached_response = PlayerAPIExtractor.getAPIResponseFromCache(arg)
     print cached_response
     sys.exit(1)
 
-
-    # # test player api response generation and caching
-    # player_vector = getPlayerVector(pid, tid, gid)
-    # player_api_extractor = PlayerAPIExtractor()
-    # print PlayerAPIExtractor.generateCacheKey(pid, tid, gid)
-    # header, row = player_api_extractor.extractVectors(player_vector, PLAYER_TYPES_ALLOWED, cache=True)
-
-    # # get from cache
-    # player_arg = (pid, tid, gid)
-    # player_cache_response = PlayerAPIExtractor.getAPIResponseFromCache(player_arg, PLAYER_TYPES_ALLOWED)
-    # print player_cache_response
-
-    # # test team api response generation and caching
-    # team_vector = getTeamVector(tid, gid)
-    # team_api_extractor = TeamAPIExtractor()
-    # print TeamAPIExtractor.generateCacheKey(tid, gid)
-    # header, row = team_api_extractor.extractVectors(team_vector, TEAM_TYPES_ALLOWED, cache=True)
-
-    # team_arg = (tid, gid)
-    team_arg = (1610612743,'0021500121')
-    team_cache_response = TeamAPIExtractor.getAPIResponseFromCache(team_arg, TEAM_TYPES_ALLOWED)
+    # test team api response generation and caching
+    team_vector = getTeamVector(tid, gid, recalculate=False)
+    team_api_extractor = TeamAPIExtractor()
+    row = team_api_extractor.extractVectors(team_vector, TEAM_TYPES_ALLOWED, cache=True)
+    team_arg = (tid, gid)
+    team_cache_response = TeamAPIExtractor.getAPIResponseFromCache(team_arg)
     print team_cache_response

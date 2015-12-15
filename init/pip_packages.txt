@@ -8,3 +8,4 @@ numpy
 matplotlib
 theano==0.6.0
 Pillow==2.7.0
+celery==3.1.19

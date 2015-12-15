@@ -18,16 +18,14 @@ from statsETL.bball.BRcrawler import crawlBRPlayer
 
 years_back=[2009,2010,2011,2012,2013,2014,2015]
 
-
 def crawlBRPlayerPosition(pid, player_name):
     player_name_parts = [_.lower().replace('.','').strip() for _ in player_name.split(' ')]
     if player_name_parts[-1] == 'jr':
         player_name_parts = player_name_parts[:-1]
     last_initial = player_name_parts[-1][0]
     player_search = '+'.join(player_name_parts[:-1] + [last_initial])
-    
+
     url = "http://www.basketball-reference.com/search/search.fcgi?search=%s" % player_search
-    print url
     links = getAllLinks(url)
 
     url_pattern = re.compile("/players/[a-z]/[a-z]+[0-9]+\.html")
@@ -42,7 +40,6 @@ def crawlBRPlayerPosition(pid, player_name):
         if result:
             valid_links = True
             # crawl for position
-            print url
             response = requests.get(url)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content)
@@ -243,7 +240,6 @@ def crawlNBAGames(date_start,date_end, recrawl=True):
     pool.join()
 
 def updateGameData(url, data):
-    print url
     newdata = turnJSONtoPD(url)
     for k,v in newdata.iteritems():
         if k not in data or data[k].empty:
@@ -254,12 +250,10 @@ def updateGameData(url, data):
                 cols_to_use = (v.columns-data[k].columns).tolist()
                 cols_to_use.append('PLAYER_ID')
                 data[k] = pd.merge(data[k], v[cols_to_use], on='PLAYER_ID')
-                print "merged into %s" % k
             elif 'TEAM_ID' in v:
                 cols_to_use = (v.columns-data[k].columns).tolist()
                 cols_to_use.append('TEAM_ID')
                 data[k] = pd.merge(data[k], v[cols_to_use], on='TEAM_ID') 
-                print "merged into %s" % k
             else:
                 print "no merge match: %s, %s" % (k,v.columns) 
     return data

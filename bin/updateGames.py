@@ -17,7 +17,7 @@ if __name__ == "__main__":
     print "UPCOMING CRAWLED: %s" % upcoming
 
     # crawl behind
-    today = datetime.now()
+    today = datetime.now() + timedelta(days=1)
     start = today - timedelta(days=DAYS_BEHIND)
     crawlNBAGames(start.strftime("%m/%d/%Y"),today.strftime("%m/%d/%Y"), recrawl=RECRAWL)
 
@@ -26,6 +26,3 @@ if __name__ == "__main__":
 
     # crawl rosters
     crawlNBARoster()
-
-    # clear cache items for old games
-    

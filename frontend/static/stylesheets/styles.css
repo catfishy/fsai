@@ -1,4 +1,33 @@
-body { padding-top: 0px; }
+body { padding-top: 1px; }
+
+
+div.statCellExtraLarge {
+  width: 90px;
+}
+
+div.statCellLarge {
+  width: 75px;
+}
+
+div.statCellSmall {
+  width: 50px;
+}
+
+.table > thead > tr > th,
+.table > tbody > tr > th,
+.table > tfoot > tr > th,
+.table > thead > tr > td,
+.table > tbody > tr > td,
+.table > tfoot > tr > td {
+  padding: 0px;
+  border-top: 1px solid #ddd;
+  vertical-align: middle;
+}
+
+.table > thead > tr > td,
+.table > tbody > tr > td {
+  vertical-align: middle;
+}
 
 table.tableSection {
     width: 100%;
@@ -16,7 +45,8 @@ table.tableSection tbody {
 
 table.tableSection th, table.tableSection td {
     text-align: center;
-    padding: 4px;
+    font-weight: bold;
+    height:40px;
 }
 
 .st-sort-ascent:before {

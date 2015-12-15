@@ -40,37 +40,45 @@
 
 <div class="animated slideInLeft" ng-show="vm.loaded" class="col-xs-12" id="nba_stats_tabs">
     <md-tabs ng-if="vm.stats_type == 'Team'">
-      <md-tab label="Windowed" ng-click="vm.slideInNewPage('windowed')"></md-tab>
-      <md-tab label="Meta" ng-click="vm.slideInNewPage('meta')"></md-tab>
-      <md-tab label="Season Stats" ng-click="vm.slideInNewPage('season')"></md-tab>
-      <md-tab label="Opponent Stats" ng-click="vm.slideInNewPage('opponent')"></md-tab>
+      <md-tab label="Windowed" ng-click="vm.slideInNewPage('ALL')"></md-tab>
     </md-tabs>
     <md-tabs ng-if="vm.stats_type == 'Player'">
-      <md-tab label="Windowed" ng-click="vm.slideInNewPage('windowed')"></md-tab>
-      <md-tab label="Meta" ng-click="vm.slideInNewPage('meta')"></md-tab>
-      <md-tab label="Exponential" ng-click="vm.slideInNewPage('exponential')"></md-tab>
-      <md-tab label="POS vs opponent" ng-click="vm.slideInNewPage('opponent_pos')"></md-tab>
-      <md-tab label="Trend within POS" ng-click="vm.slideInNewPage('trend_pos')"></md-tab>
-      <md-tab label="Home/Road Split" ng-click="vm.slideInNewPage('homeroadsplit')"></md-tab>
-      <md-tab label="Opponent Split" ng-click="vm.slideInNewPage('oppsplit')"></md-tab>
+      <md-tab label="Guards" ng-click="vm.slideInNewPage('G')"></md-tab>
+      <md-tab label="Forwards" ng-click="vm.slideInNewPage('F')"></md-tab>
+      <md-tab label="Centers" ng-click="vm.slideInNewPage('C')"></md-tab>
     </md-tabs>
 </div>
 
-<div class="statsTable animated slideInLeft col-xs-12" ng-show="vm.focused">
-  <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="table table-striped tableSection" id="nba_stats_table">
+<div class="statsTable animated slideInLeft" ng-show="vm.focused">
+  <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="tableSection table table-hover" id="nba_stats_table">
     <thead>
       <tr>
-
-          <th class="statCell" lr-drag-src="headers" lr-drop-target="headers" ng-repeat="header in vm.displayed_headers" st-sort="{{header.key}}.v">
-            <div style="width: 75px;">{{header.name}}</div>
+          <th lr-drag-src="headers" lr-drop-target="headers" ng-repeat="header in vm.displayed_headers" st-sort="{{header.key}}.v" ng-style="{position: relative}">
+            <div ng-show="header.key == 'gid'" class="statCellLarge">
+              {{header.name}}
+            </div>
+            <div ng-show="header.key == 'pid'" class="statCellExtraLarge">
+              {{header.name}}
+            </div>
+            <div ng-show="header.key != 'pid' && header.key != 'gid'" class="statCellSmall">
+              {{header.name}}
+            </div>
             <!--<input class="form-control input-mini" st-search="{{header.key}}" placeholder="{{header.name}}"/>-->
           </th>
       </tr>
     </thead>
     <tbody>
       <tr ng-repeat="row in vm.displayed_rows">
-        <td class="statCell" ng-repeat="header in vm.displayed_headers">
-          <div style="width: 75px;" ng-style="{color: row[header.key].c}">{{row[header.key].v}}</div>
+        <td ng-repeat="header in vm.displayed_headers" ng-style="{'background-color': row[header.key].c}">
+          <div ng-show="header.key == 'gid'" class="statCellLarge">
+            {{row[header.key].v}}
+          </div>
+          <div ng-show="header.key == 'pid'" class="statCellExtraLarge">
+            {{row[header.key].v}}
+          </div>
+          <div ng-show="header.key != 'pid' && header.key != 'gid'" class="statCellSmall">
+            {{row[header.key].v}}
+          </div>
         </td>
       </tr>
     </tbody>
