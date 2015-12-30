@@ -844,7 +844,7 @@ class playerFeatureVector(featureVector):
                 merged[k]=merged[k] * multipliers
 
         # remove zero minute games
-        merged=merged[merged['MIN'] > 0]
+        # merged=merged[merged['MIN'] > 0]
 
         # drop columns
         for c in col_blacklist:

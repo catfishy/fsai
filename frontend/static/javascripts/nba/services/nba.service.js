@@ -22,7 +22,9 @@
     */
     var NBAStats = {
       getTeamStats: getTeamStats,
-      getPlayerStats: getPlayerStats
+      getPlayerStats: getPlayerStats,
+      getTeamMatchupStats: getTeamMatchupStats,
+      getPlayerMatchupStats: getPlayerMatchupStats
     };
 
     return NBAStats;
@@ -54,7 +56,7 @@
     * @returns {Promise}
     * @memberOf fsai.nba.services.NBAStats
     */
-    function getTeamStats(arg_tid, arg_gid, canceler) {
+    function getTeamMatchupStats(arg_tid, arg_gid, canceler) {
       return $http.get('/api/v1/nba/daily-team', {
         params: {
           tid: arg_tid,
@@ -91,7 +93,7 @@
     * @returns {Promise}
     * @memberOf fsai.nba.services.NBAStats
     */
-    function getTeamStats(arg_pid, arg_tid, arg_gid, canceler) {
+    function getPlayerMatchupStats(arg_pid, arg_tid, arg_gid, canceler) {
       return $http.get('/api/v1/nba/daily-player', {
         params: {
           pid: arg_pid,

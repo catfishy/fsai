@@ -3,9 +3,11 @@
 
     angular
         .module('fsai', [
+          'ui.bootstrap',
           'lrDragNDrop',
           'ngMaterial',
           'ngAnimate',
+          'ngSanitize',
           'smart-table',
           'fsai.routes',
           'fsai.authentication',

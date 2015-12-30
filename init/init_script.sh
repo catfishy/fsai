@@ -66,14 +66,8 @@ then
     fi
     # check if already run redis
     REDISCONF=$PROJECTPTH'/init/redis.conf'
-    PRIORREDIS=$(pgrep redis)
-    if [ "$PRIORREDIS" ]
-    then
-        echo "Starting local redis server with conf $REDISCONF"
-        /usr/local/bin/redis-server $REDISCONF
-    else
-        echo "Redis already running PID: $PRIORREDIS"
-    fi
+    echo "Starting local redis server with conf $REDISCONF"
+    /usr/local/bin/redis-server $REDISCONF
 fi
 
 # TODO: call python init script to install packages and start daemons

@@ -14,7 +14,7 @@ from statsETL.bball.apiExtraction import colorExtractor, TeamAPIExtractor, Playe
 RECALCULATE=True
 CACHE=True
 WINDOW=10 # DON'T CHANGE!!!
-DAYS_BEHIND=3
+DAYS_BEHIND=1
 DAYS_AHEAD=3
 
 def roundrobin(*iterables):
@@ -130,7 +130,12 @@ def updatePlayerStats(ahead=False):
         print "PLAYER STATS COUNT: %s" % (i+1)
         if response is None:
             continue
-        color.updateColorRange(response)
+        # get position bins
+        pos = response.get('meta_positions')
+        if pos:
+            pos = pos.split('/')
+        print "COLOR BINS: %s" % pos
+        color.updateColorRange(response, pos)
     pool.close()
     pool.join()
     # save color range if we weren't looking ahead
@@ -142,7 +147,7 @@ if __name__ == "__main__":
     # getPlayerVector_worker(args)
     # sys.exit(1)
 
-    updateTeamStats(ahead=False)
-    updateTeamStats(ahead=True)
+    #updateTeamStats(ahead=False)
+    #updateTeamStats(ahead=True)
     updatePlayerStats(ahead=False)
     updatePlayerStats(ahead=True)

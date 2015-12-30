@@ -1,0 +1,34 @@
+<div class="modal-header">
+    <button class="btn btn-primary" type="button" ng-click="vm.close()">Close</button>
+    <h3 class="modal-title">Matchup</h3>
+    <div ng-bind="vm.pid"></div>
+    <div ng-bind-html="vm.gid"></div>
+</div>
+<div class="modal-body">
+  <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="tableSection table table-hover" id="player_matchup_stats_table">
+    <thead>
+      <tr>
+          <th lr-drag-src="headers" lr-drop-target="headers" ng-repeat="header in vm.displayed_headers" ng-style="{position: relative}" st-skip-natural="true">
+            <div ng-show="header.key == 'stat_key'" class="statCellExtraExtraLarge" ng-bind="header.name"></div>
+            <div ng-show="header.key != 'stat_key'" class="statCellExtraLarge" ng-bind="header.name"></div>
+          </th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr ng-repeat="row in vm.displayed_rows">
+        <td ng-repeat="header in vm.displayed_headers" ng-style="{'background-color': row[header.key].c}">
+          <div ng-show="header.key == 'stat_key'" class="statCellExtraExtraLarge"  ng-bind="row[header.key].v"></div>
+          <div ng-show="header.key != 'stat_key'" class="statCellExtraLarge" ng-bind="row[header.key].v"></div>
+        </td>
+      </tr>
+    </tbody>
+    <tfoot>
+    </tfoot>
+  </table>
+</div>
+<div class="modal-footer">
+</div>
+
+
+
+

@@ -53,32 +53,20 @@
   <table st-table="vm.displayed_rows" st-safe-src="vm.stat_rows" class="tableSection table table-hover" id="nba_stats_table">
     <thead>
       <tr>
-          <th lr-drag-src="headers" lr-drop-target="headers" ng-repeat="header in vm.displayed_headers" st-sort="{{header.key}}.v" ng-style="{position: relative}">
-            <div ng-show="header.key == 'gid'" class="statCellLarge">
-              {{header.name}}
-            </div>
-            <div ng-show="header.key == 'pid'" class="statCellExtraLarge">
-              {{header.name}}
-            </div>
-            <div ng-show="header.key != 'pid' && header.key != 'gid'" class="statCellSmall">
-              {{header.name}}
-            </div>
+          <th lr-drag-src="headers" lr-drop-target="headers" ng-repeat="header in vm.displayed_headers" st-sort="{{header.key}}.v" ng-style="{position: relative}" st-skip-natural="true">
+            <div ng-show="header.key == 'gid'" class="statCellLarge" ng-bind="header.name"></div>
+            <div ng-show="header.key == 'pid'" class="statCellExtraLarge" ng-bind="header.name"></div>
+            <div ng-show="header.key != 'pid' && header.key != 'gid'" class="statCellSmall" ng-bind="header.name"></div>
             <!--<input class="form-control input-mini" st-search="{{header.key}}" placeholder="{{header.name}}"/>-->
           </th>
       </tr>
     </thead>
     <tbody>
-      <tr ng-repeat="row in vm.displayed_rows">
+      <tr ng-repeat="row in vm.displayed_rows" ng-click="vm.playerMatchup(row)">
         <td ng-repeat="header in vm.displayed_headers" ng-style="{'background-color': row[header.key].c}">
-          <div ng-show="header.key == 'gid'" class="statCellLarge">
-            {{row[header.key].v}}
-          </div>
-          <div ng-show="header.key == 'pid'" class="statCellExtraLarge">
-            {{row[header.key].v}}
-          </div>
-          <div ng-show="header.key != 'pid' && header.key != 'gid'" class="statCellSmall">
-            {{row[header.key].v}}
-          </div>
+          <div ng-show="header.key == 'gid'" class="statCellLarge" ng-bind-html="row[header.key].v"></div>
+          <div ng-show="header.key == 'pid'" class="statCellExtraLarge"  ng-bind="row[header.key].v"></div>
+          <div ng-show="header.key != 'pid' && header.key != 'gid'" class="statCellSmall" ng-bind="row[header.key].v"></div>
         </td>
       </tr>
     </tbody>

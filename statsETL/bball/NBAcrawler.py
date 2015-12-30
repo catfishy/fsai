@@ -18,6 +18,33 @@ from statsETL.bball.BRcrawler import crawlBRPlayer
 
 years_back=[2009,2010,2011,2012,2013,2014,2015]
 
+
+def crawlFanDuelPlayers(fanduel_gid):
+    '''
+    13937
+    '''
+    url = 'https://api.fanduel.com/fixture-lists/13937/players' % fanduel_gid
+    results = {}
+    try:
+        response = requests.get(url)
+    except requests.exceptions.ConnectionError as e:
+        print "Connection Error to %s" % url
+        return results
+    try:
+        response = response.json()
+    except Exception as e:
+        print "JSON Decode Error to %s: %s" % (url, response)
+        return results
+    for rs in response.get('resultSets',[]):
+        name = rs['name']
+        headers = rs['headers']
+        rows = rs['rowSet']
+        df = pd.DataFrame(rows, columns=headers)
+        results[name] = df
+    return results
+
+
+
 def crawlBRPlayerPosition(pid, player_name):
     player_name_parts = [_.lower().replace('.','').strip() for _ in player_name.split(' ')]
     if player_name_parts[-1] == 'jr':

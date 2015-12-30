@@ -9,6 +9,7 @@ import json
 from collections import defaultdict
 import copy
 import traceback
+import re
 
 import numpy as np
 import pandas as pd
@@ -21,7 +22,7 @@ from statsETL.db.mongolib import *
 
 TEAM_REDIS_CACHE = RedisTTLCache('teamapi')
 PLAYER_REDIS_CACHE = RedisTTLCache('playerapi')
-PLAYER_TYPES_ALLOWED = ['windowed', 'opponent_pos', 'trend_pos', 'exponential', 'homeroadsplit', 'oppsplit', 'meta']
+PLAYER_TYPES_ALLOWED = ['windowed', 'opponent_pos', 'trend_pos', 'exponential', 'expdiff', 'homeroadsplit', 'oppsplit', 'meta']
 TEAM_TYPES_ALLOWED = ['windowed', 'meta', 'season']
 REVERSED = ['TO',
             'TM_TOV_PCT',
@@ -42,54 +43,128 @@ REVERSED = ['TO',
 Specifies which stat categories to query for, given a request type
 '''
 PLAYER_STAT_TYPE = {'basic': ['exponential','meta'],
-                    'matchup': ['exponential','opponent_pos','trend_pos','homeroadsplit','oppsplit']}
+                    'matchup': ['expdiff','trend_pos','opponent_pos','homeroadsplit','oppsplit']}
 TEAM_STAT_TYPE = {'basic': ['windowed','meta'],
                   'matchup': ['windowed','season']}
+
+STAT_TYPE_NAMES = {'expdiff': 'EXP MEAN DIFF',
+                   'exponential': 'EXP',
+                   'windowed': 'MEAN',
+                   'meta': 'META',
+                   'season': 'SEASON',
+                   'opponent_pos': 'POS VS OPP',
+                   'trend_pos': 'TREND IN POS',
+                   'homeroadsplit': 'SPLIT HOME ROAD',
+                   'oppsplit': 'SPLIT VS OPP',
+                   'stat_key': 'STAT'}
 
 '''
 Specifies which stats to return, given a request type
 '''
 BASIC_STAT_TYPE_KEYS = [('gid','GAME'),
-                        ('tid','TEAM'),
                         ('pid','PLAYER'),
-                        ('home/road','HOME/ ROAD'),
                         ('positions','POS'),
                         ('days_rest','REST'),
                         ('MIN','MIN'),
-                        ('USG_PCT','USG%'),
-                        ('PIE','PIE'),
-                        ('TCHS','TOUCH'),
+                        ('USG_PCT','USG  %'),
+                        ('TCHS','TCH'),
                         ('PTS','PTS'),
                         ('REB','REB'),
+                        ('REB_PCT', 'REB  %'),
                         ('AST','AST'),
-                        ('PASS','PASS'),
+                        ('AST_RATIO','AST RATIO'),
                         ('TO','TO'),
                         ('STL','STL'),
                         ('BLK','BLK'),
-                        ('BLKA','BLKA'),
-                        ('REB_PCT','REB%'),
-                        ('AST_RATIO','AST RATIO'),
                         ('FGA','FGA'),
                         ('TS_PCT','TS%'),
-                        ('FG3A','FG3A'),
-                        ('FG3_PCT','FG3%'),
+                        ('FG3A','3PA'),
+                        ('FG3_PCT','3P%'),
                         ('FTA_RATE','FTA RATE'),
                         ('FT_PCT','FT%'),
-                        ('PCT_FGA','%FGA'),
-                        ('PCT_FGM','%FGM'),
-                        ('PCT_FG3A','%FG3M'),
-                        ('PCT_FG3M','%FG3M'),
-                        ('PCT_FTA','%FTA'),
-                        ('PCT_FTM','%FTM'),
-                        ('PCT_REB','%REB'),
-                        ('PCT_AST','%AST'),
-                        ('PCT_TOV','%TO'),
-                        ('PCT_STL','%STL'),
-                        ('PCT_PFD','%PFD'),
-                        ('PCT_BLK','%BLK'),
-                        ('PCT_BLKA','%BLKA'),
-                        ('PCT_PTS','%PTS')]
-MATCHUP_STAT_TYPE_KEYS = []
+                        ('PCT_AST_FGM','%  AST FGM'),
+                        ('PCT_UAST_FGM','%  UAST FGM'),
+                        ('PCT_FGM','%  FGM'),
+                        ('PCT_PTS','%  PTS'),
+                        ('PCT_REB','%  REB'),
+                        ('PCT_AST','%  AST'),
+                        ('PCT_BLK','%  BLK'),
+                        ('PCT_FGA','%  FGA'),
+                        ('PCT_FG3A','%  3PA'),
+                        ('PCT_FTA','%  FTA'),
+                        ('PCT_TOV','%  TO'),
+                        ('PCT_STL','%  STL'),
+                        ('PCT_PFD','%  PFD'),
+                        ('PCT_BLKA','%  BLKA')]
+MATCHUP_STAT_TYPE_KEYS = [('stat_key', 'STAT'),
+                          ('PTS','PTS'),
+                          ('AST','AST'),
+                          ('REB','REB'),
+                          ('BLK','BLK'),
+                          ('STL','STL'),
+                          ('PACE','PACE'),
+                          ('PIE','PIE'),
+                          ('FGA','FGA'),
+                          ('TS_PCT','TS%'),
+                          ('UFGA','UFGA'),
+                          ('UFG_PCT','UFG%'),
+                          ('CFGA','CFGA'),
+                          ('CFG_PCT','CFG%'),
+                          ('FG3A','3PA'),
+                          ('FG3_PCT','3P%'),
+                          ('AST_PCT','AST%'),
+                          ('AST_TOV','AST/ TOV'),
+                          ('OREB_PCT','OREB%'),
+                          ('DREB_PCT','DREB%'),
+                          ('TM_TOV_PCT','TOV%'),
+                          ('PFD','PFD'),
+                          ('FTA_RATE','FTA RATE'),
+                          ('PTS_FB','FB PTS'),
+                          ('PTS_PAINT','PAINT PTS'),
+                          ('PTS_2ND_CHANCE','2ND CHANCE PTS'),
+                          ('PTS_OFF_TOV','TOV PTS'),
+                          ('Above_the_Break_3_Center(C)_24+_ft_attempted','3P (Center) Attmpt'),
+                          ('Above_the_Break_3_Center(C)_24+_ft_percent','3P (Center) %'),
+                          ('Above_the_Break_3_Right_Side_Center(RC)_24+_ft_attempted','3P (Right) Attmpt'),
+                          ('Above_the_Break_3_Right_Side_Center(RC)_24+_ft_percent','3P (Right) %'),
+                          ('Above_the_Break_3_Left_Side_Center(LC)_24+_ft_attempted','3P (Left) Attmpt'),
+                          ('Above_the_Break_3_Left_Side_Center(LC)_24+_ft_percent','3P (Left) %'),
+                          ('Left_Corner_3_Left_Side(L)_24+_ft_attempted','3P (Left Corner) Attmpt'),
+                          ('Left_Corner_3_Left_Side(L)_24+_ft_percent','3P (Left Corner) %'),
+                          ('Right_Corner_3_Right_Side(R)_24+_ft_attempted','3P (Right Corner) Attmpt'),
+                          ('Right_Corner_3_Right_Side(R)_24+_ft_percent','3P (Right Corner) %'),
+                          ('Mid_Range_Left_Side(L)_16_24_ft_attempted','MR (Left Long) Attmpt'),
+                          ('Mid_Range_Left_Side(L)_16_24_ft_percent','MR (Left Long) %'),
+                          ('Mid_Range_Left_Side_Center(LC)_16_24_ft_attempted','MR (Left Center Long) Attmpt'),
+                          ('Mid_Range_Left_Side_Center(LC)_16_24_ft_percent','MR (Left Center Long) %'),
+                          ('Mid_Range_Center(C)_16_24_ft_attempted','MR (Center Long) Attmpt'),
+                          ('Mid_Range_Center(C)_16_24_ft_percent','MR (Center Long) %'),
+                          ('Mid_Range_Right_Side_Center(RC)_16_24_ft_attempted','MR (Right Center Long) Attmpt'),
+                          ('Mid_Range_Right_Side_Center(RC)_16_24_ft_percent','MR (Right Center Long) %'),
+                          ('Mid_Range_Right_Side(R)_16_24_ft_attempted','MR (Right Long) Attmpt'),
+                          ('Mid_Range_Right_Side(R)_16_24_ft_percent','MR (Right Long) %'),
+                          ('Mid_Range_Left_Side(L)_8_16_ft_attempted','MR (Left Short) Attmpt'),
+                          ('Mid_Range_Left_Side(L)_8_16_ft_percent','MR (Left Short) %'),
+                          ('Mid_Range_Center(C)_8_16_ft_attempted','MR (Center Short) Attmpt'),
+                          ('Mid_Range_Center(C)_8_16_ft_percent','MR (Center Short) %'),
+                          ('Mid_Range_Right_Side(R)_8_16_ft_attempted','MR (Right Short) Attmpt'),
+                          ('Mid_Range_Right_Side(R)_8_16_ft_percent','MR (Right Short) %'),
+                          ('In_The_Paint_(Non_RA)_Left_Side(L)_8_16_ft_attempted','ITP (Left) Attmpt'),
+                          ('In_The_Paint_(Non_RA)_Left_Side(L)_8_16_ft_percent','ITP (Left) %'),
+                          ('In_The_Paint_(Non_RA)_Center(C)_8_16_ft_attempted','ITP (Center) Attmpt'),
+                          ('In_The_Paint_(Non_RA)_Center(C)_8_16_ft_percent','ITP (Center) %'),
+                          ('In_The_Paint_(Non_RA)_Right_Side(R)_8_16_ft_attempted','ITP (Right) Attmpt'),
+                          ('In_The_Paint_(Non_RA)_Right_Side(R)_8_16_ft_percent','ITP (Right) %'),
+                          ('In_The_Paint_(Non_RA)_Center(C)_Less_Than_8_ft_attempted','ITP (Center Low) Attmpt'),
+                          ('In_The_Paint_(Non_RA)_Center(C)_Less_Than_8_ft_percent','ITP (Center Low) %'),
+                          ('Restricted_Area_Center(C)_Less_Than_8_ft_attempted','RESTRICTED Attmpt'),
+                          ('Restricted_Area_Center(C)_Less_Than_8_ft_percent','RESTRICTED %')]
+
+def cleanKey(key):
+    cleaned_key = key.replace('+','')
+    cleaned_key = re.sub(r"\(.*?\)", "", cleaned_key)
+    return cleaned_key
+
 
 class colorExtractor(object):
 
@@ -97,15 +172,22 @@ class colorExtractor(object):
     gradient from red to green
     '''
 
-    def __init__(self, vector_type, date=None):
+    def __init__(self, vector_type, date=None, gid=None):
         self.vector_type = vector_type
         self.colorRange = {}
         self.colorRangeDf = pd.DataFrame()
         if date is not None:
             self.loadColorRange(date)
+        elif gid is not None:
+            game_row = nba_conn.findByID(nba_games_collection, str(gid).zfill(10))
+            if game_row is not None:
+                self.loadColorRange(game_row['date'])
+                print "Loaded color range for game %s" % gid 
 
-    def updateColorRange(self, newvals):
-        new_row = {}
+    def updateColorRange(self, newvals, bin=None):
+        if bin is None:
+            bin = ['ALL']
+        new_row = {'bin': bin}
         for k,v in newvals.iteritems():
             try:
                 v = float(v)
@@ -114,30 +196,41 @@ class colorExtractor(object):
             new_row[k] = v
         self.colorRangeDf = pd.concat((self.colorRangeDf,pd.DataFrame([new_row])))
         self.colorRangeDf.reset_index(drop=True, inplace=True)
-        if len(self.colorRangeDf.index) > 1000: # cap at 1000 rows
+        if len(self.colorRangeDf.index) > 1500: # cap at 1500 rows
             self.colorRangeDf.drop(self.colorRangeDf.index[:1],inplace=True)
 
     def dateKey(self, date):
         return datetime(year=date.year, month=date.month, day=date.day)
 
     def saveColorRange(self, date):
-        # average df
-        d = self.colorRangeDf.describe()
-        mean = d.loc['mean']
-        std = d.loc['std']
-        minvals = d.loc['min']
-        maxvals = d.loc['max']
-        lower = mean - (2*std)
-        upper = mean + (2*std)
-        # clamp if necessary
-        nonneg_cols = minvals >= 0
-        lower[nonneg_cols] = lower[nonneg_cols].apply(lambda x: max(x,0))
-        nonpos_cols = maxvals <= 0
-        upper[nonpos_cols] = upper[nonpos_cols].apply(lambda x: min(x,0))
-        ranges = pd.concat((lower,upper),axis=1).T
-        ranges.index = ['lower','upper']
-        # convert to dict
-        self.colorRange = {c: list(ranges.loc[:,c])  for c in ranges.columns}
+        bins = list(set([b for l in np.unique(self.colorRangeDf.bin) for b in l]))
+        if 'ALL' not in bins:
+            bins.append('ALL')
+
+        def indicator(bin, binlist):
+            return bin in binlist
+
+        for bin in bins:
+            if bin == 'ALL':
+                d = self.colorRangeDf.describe()
+            else:
+                in_bin = self.colorRangeDf.bin.apply(lambda row: indicator(bin,row))
+                d = self.colorRangeDf[in_bin].describe()
+            mean = d.loc['mean']
+            std = d.loc['std']
+            minvals = d.loc['min']
+            maxvals = d.loc['max']
+            lower = mean - (2*std)
+            upper = mean + (2*std)
+            # clamp if necessary
+            nonneg_cols = minvals >= 0
+            lower[nonneg_cols] = lower[nonneg_cols].apply(lambda x: max(x,0))
+            nonpos_cols = maxvals <= 0
+            upper[nonpos_cols] = upper[nonpos_cols].apply(lambda x: min(x,0))
+            ranges = pd.concat((lower,upper),axis=1).T
+            ranges.index = ['lower','upper']
+            # convert to dict
+            self.colorRange[bin] = {c: list(ranges.loc[:,c])  for c in ranges.columns}
         # save
         try:
             to_save = {"date": self.dateKey(date), "vector_type": self.vector_type, "data": self.colorRange}
@@ -156,19 +249,20 @@ class colorExtractor(object):
             return True
         return False
 
-    def extractColor(self, key, value):
+    def extractColor(self, bin, key, value):
         # default transparent
-        if key not in self.colorRange:
+        if bin not in self.colorRange:
+            return 'transparent'
+        if key not in self.colorRange[bin]:
+            return 'transparent'
+        if value is None:
             return 'transparent'
 
         # determine reversal
-        key_parts = key.split('_')
-        prefix = key_parts[0]
-        nonprefix_key = '_'.join(key_parts[1:])
-        if nonprefix_key in REVERSED:
-            reversed = True
-        else:
-            reversed = False
+        prefix, suffix = APIExtractor.splitKey(key)
+        reversed = True if suffix in REVERSED else False
+        if reversed:
+            print "REVERSED COLOR: %s" % key
 
         # in case there is a whole stat type where ranks are flipped
         '''
@@ -176,7 +270,7 @@ class colorExtractor(object):
             reversed = not reversed
         '''
         # get range and clamp
-        minval, maxval = tuple(self.colorRange[key])
+        minval, maxval = tuple(self.colorRange[bin][key])
         if value <= minval: 
             fraction = 0.0
         elif value >= maxval:
@@ -219,6 +313,16 @@ class APIExtractor(object):
         elif isinstance(data, float):
             data = round(data,2)
         return data
+
+    @classmethod
+    def splitKey(cls, key):
+        all_types = list(set(PLAYER_TYPES_ALLOWED) | set(TEAM_TYPES_ALLOWED))
+        for t in all_types:
+            if key.startswith(t):
+                prefix = t
+                suffix = key.replace('%s_' % t, '')
+                return (prefix, suffix)
+        return ('',key)
 
     @classmethod
     def is_nan(cls, a):
@@ -271,7 +375,7 @@ class TeamAPIExtractor(APIExtractor):
 
     def fillBasicRow(self, vector):
         gamecode, abbr = vector.translateGameCode()
-        row = {'gid': gamecode,
+        row = {'gid': gamecode.replace(abbr, '<b>%s</b>' % abbr),
                'tid': abbr}
         return row
 
@@ -352,9 +456,10 @@ class PlayerAPIExtractor(APIExtractor):
 
     def fillBasicRow(self, vector):
         gamecode, abbr = vector.translateGameCode()
-        row = {'gid': gamecode,
+        row = {'gid': gamecode.replace(abbr, '<b>%s</b>' % abbr),
                'pid': vector.player_name,
                'tid': abbr}
+        print row
         return row
 
     def extractMetaVector(self, vector):
@@ -446,10 +551,25 @@ class PlayerAPIExtractor(APIExtractor):
         row.update(self.fillDataRow('oppsplit', stats))
         return row
 
+    def extractExpDiffVector(self, vector, exp_row, window_row):
+        get_val = lambda v: (np.nan if v == 'NaN' else v)
+        exp_row = {k.replace('exponential_',''):get_val(v) for k,v in exp_row.iteritems()}
+        window_row = {k.replace('windowed_',''):get_val(v) for k,v in window_row.iteritems()}
+        df = pd.DataFrame([exp_row, window_row])
+        to_drop = [_ for _ in df.columns if not all(df[_].apply(np.isreal))]
+        df = df.drop(to_drop, axis=1)
+        expdiff = df.loc[0].subtract(df.loc[1])
+        row = self.fillDataRow('expdiff', dict(expdiff))
+        # overwrite the nonsensical basic row values from diff operation
+        row.update(self.fillBasicRow(vector)) 
+        return row
+
     def extractVectors(self, vector, types, cache=True):
         whole_row = {}
         try:
+            calc_expdiff = False
             for t in types:
+                row = None
                 if t == 'windowed':
                     row = self.extractWindowVector(vector)
                 elif t == 'exponential':
@@ -464,7 +584,15 @@ class PlayerAPIExtractor(APIExtractor):
                     row = self.extractHomeRoadSplitVector(vector)
                 elif t == 'oppsplit':
                     row = self.extractOppSplitVector(vector)
+                elif t == 'expdiff':
+                    calc_expdiff = True
+                    continue
                 whole_row[t] = row
+            if calc_expdiff:
+                exp_row = whole_row['exponential'] if 'exponential' in whole_row else self.extractExponentialVector(vector)
+                wind_row = whole_row['windowed'] if 'windowed' in whole_row else self.extractWindowVector(vector)
+                row = self.extractExpDiffVector(vector, exp_row, wind_row)
+                whole_row['expdiff'] = row
         except Exception as e:
             traceback.print_exc()
             raise e
