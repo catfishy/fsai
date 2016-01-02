@@ -8,15 +8,14 @@ then
 fi
 
 # dev or production
-if [ "$1" == "dev" ]
+if [ "$DEPLOYMENT_GROUP_NAME" == "frontend" ]
 then
-    INITENV='DEV'
-elif [ "$1" == "prod" ]
+    INITENV='FRONTEND'
+elif [ "$DEPLOYMENT_GROUP_NAME" == "compute" ]
 then
-    INITENV='PROD'
+    INITENV='COMPUTE'
 else
-    echo "Specify 'dev' or 'prod' as first argument"
-    exit 1
+    INITENV='DEV'
 fi
 
 # Add project home to python path
@@ -47,10 +46,28 @@ fi
 # reload bash profile
 source ${HOME}/.bash_profile
 
-# If in dev, 
-# start mongodb with db=/data/db directory
-# start redis-server with conf=/usr/local/etc/redis.conf
+# run setup
+python $PROJECTPTH'/init/setup.py' 
 
+# if in compute,
+# start mongodb (db=/data/db) - load most recent dump from s3
+# start redis-server (conf=$PROJECTPTH'/init/redis.conf') - load most recent dump from s3
+# load crontab
+if [ "$INITENV" == 'COMPUTE']
+then
+fi
+
+
+# if in prod,
+# connect mongo to compute mongo
+# connect redis to compute redis
+# start server
+if [ "$INITENV" == 'FRONTEND']
+then
+fi
+
+# If in dev,
+# start local mongo + redis (load most recent dump from s3)
 if [ "$INITENV" == 'DEV' ]
 then
     # check if already run mongod
@@ -69,7 +86,5 @@ then
     echo "Starting local redis server with conf $REDISCONF"
     /usr/local/bin/redis-server $REDISCONF
 fi
-
-# TODO: call python init script to install packages and start daemons
 
 exit 0
