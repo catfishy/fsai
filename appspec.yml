@@ -11,6 +11,7 @@ files:
     destination: /usr/local/fsai/statsETL
 permissions:
 hooks:
-  - location: init/init_envvars.sh
-    runas: ec2-user
+  BeforeInstall:
+    - location: init/init_envvars.sh
+      runas: ec2-user
 
