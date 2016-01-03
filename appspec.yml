@@ -11,4 +11,6 @@ files:
     destination: /usr/local/fsai/statsETL
 permissions:
 hooks:
+  AfterInstall:
+    - location: init/init_envvars.sh
 
