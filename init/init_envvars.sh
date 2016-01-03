@@ -11,15 +11,22 @@ else
     INITENV='DEV'
 fi
 
+# Add initenv
 CMD='export INITENV='
-# remove old setting
 grep -v "$CMD" ${HOME}/.bash_profile > ${HOME}/.bash_profile_cleaned
 mv ${HOME}/.bash_profile_cleaned ${HOME}/.bash_profile
 echo "Setting init env"
 echo $CMD\'$INITENV\' >> ${HOME}/.bash_profile
 
-# Add project home to python path
+# Add project path
+CMD='export PROJECTPTH='
 PROJECTPTH='/usr/local/fsai'
+grep -v "$CMD" ${HOME}/.bash_profile > ${HOME}/.bash_profile_cleaned
+mv ${HOME}/.bash_profile_cleaned ${HOME}/.bash_profile
+echo "Setting project path"
+echo $CMD\'$PROJECTPTH\' >> ${HOME}/.bash_profile
+
+# Add project home to python path
 CMD='export PYTHONPATH=${PYTHONPATH}:'
 CMD=$CMD$PROJECTPTH
 if grep -Fxq "$CMD" ${HOME}/.bash_profile
@@ -32,3 +39,5 @@ fi
 
 # reload bash profile
 source ${HOME}/.bash_profile
+
+exit 0

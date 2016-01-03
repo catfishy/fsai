@@ -12,15 +12,21 @@
   ],
   "dependencies": {
     "angular": "~1.4.7",
+    "angular-animate": "~1.4.7",
+    "angular-aria": "~1.4.7",
+    "angular-bootstrap": "~0.14.3",
     "angular-route": "~1.3.1",
     "angular-cookies": "~1.4.0",
     "angular-material": "master",
+    "angular-sanitize": "",
     "bootstrap": "~3.3.0",
     "bootstrap-material-design": "~0.1.5",
     "jquery": "~2.1.1",
     "ngDialog": "~0.3.3",
     "underscore": "~1.7.0",
-    "angular-smart-table": "~2.1.4"
+    "angular-smart-table": "~2.1.4",
+    "lrDragNDrop": "~1.0.2",
+    "underscore": "~1.7.0",
   }
 }
 

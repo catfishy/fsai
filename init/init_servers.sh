@@ -24,23 +24,22 @@ fi
 source ${HOME}/.bash_profile
 
 # if in compute,
-# start mongodb (db=/data/db) - load most recent dump from s3
-# start redis-server (conf=$PROJECTPTH'/init/redis.conf') - load most recent dump from s3
+# start mongodb (db=/var/lib/mongo, logpath=/var/log/mongodb.log, port 27017), then load most recent dump from s3
+# start redis-server (conf=$PROJECTPTH'/init/redis.conf'), then load most recent dump from s3
 # load crontab
 if [ "$INITENV" == 'COMPUTE']
 then
+    service mongod start
+    service redis-server start
 fi
 
-# if in prod,
-# connect mongo to compute mongo
-# connect redis to compute redis
-# start server
+# if in frontend, start django server
 if [ "$INITENV" == 'FRONTEND']
 then
 fi
 
 # If in dev,
-# start local mongo + redis (load most recent dump from s3)
+# start local mongo + redis (load most recent dumps from s3)
 if [ "$INITENV" == 'DEV' ]
 then
     # check if already run mongod
@@ -48,7 +47,7 @@ then
     if [ "$PRIORMONGOD" == "" ]
     then
         # make sure /data/db directory exists
-        echo "Starting local mongod at localhost:27017, db=/data/db"
+        echo "Starting local mongod"
         mkdir -p /data/db
         mongod --fork --logpath /var/log/mongodb.log
     else
