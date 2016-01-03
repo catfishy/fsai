@@ -29,8 +29,8 @@ source ${HOME}/.bash_profile
 # load crontab
 if [ "$INITENV" == 'COMPUTE']
 then
-    service mongod start
-    service redis-server start
+    sudo service mongod start
+    sudo service redis-server start
 fi
 
 # if in frontend, start django server

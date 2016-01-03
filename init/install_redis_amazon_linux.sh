@@ -11,7 +11,7 @@ wget http://download.redis.io/releases/redis-3.0.6.tar.gz
 tar xzf redis-3.0.6.tar.gz
 cd redis-3.0.6
 make
- 
+
 # Create Directories and Copy Redis Files
 sudo mkdir /etc/redis 
 sudo mkdir /var/lib/redis
@@ -25,8 +25,6 @@ wget https://raw.github.com/saxenap/install-redis-amazon-linux-centos/master/red
 # Move and Configure Redis-Server
 sudo mv redis-server /etc/init.d
 sudo chmod 755 /etc/init.d/redis-server
-#sudo vim /etc/init.d/redis-server
-#  redis="/usr/local/bin/redis-server"
 
 # Auto-Enable Redis-Server
 sudo chkconfig --add redis-server

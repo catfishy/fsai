@@ -26,18 +26,20 @@ mv ${HOME}/.bash_profile_cleaned ${HOME}/.bash_profile
 echo "Setting project path"
 echo $CMD\'$PROJECTPTH\' >> ${HOME}/.bash_profile
 
-# Add project home to python path
-CMD='export PYTHONPATH=${PYTHONPATH}:'
-CMD=$CMD$PROJECTPTH
-if grep -Fxq "$CMD" ${HOME}/.bash_profile
-then
-    echo "python path export found"
+if [ "${PYTHONPATH/$PROJECTPTH}" = "$PYTHONPATH" ] ; then
+    CMD='export PYTHONPATH=${PYTHONPATH}:'
+    CMD=$CMD$PROJECTPTH
+    if grep -Fxq "$CMD" ${HOME}/.bash_profile
+    then
+        echo "python path export found"
+    else
+        echo "python path export not found"
+        echo $CMD >> ${HOME}/.bash_profile
+    fi
 else
-    echo "python path export not found"
-    echo $CMD >> ${HOME}/.bash_profile
+    echo "Project path already in python path"
 fi
 
 # reload bash profile
-source ${HOME}/.bash_profile
-
+. ${HOME}/.bash_profile
 exit 0
