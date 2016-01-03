@@ -1,14 +1,14 @@
 version: 0.0
 os: linux
 files:
-  - source: bin
-    destination: /usr/local/fsai/
-  - source: frontend
-    destination: /usr/local/fsai/
-  - source: init
-    destination: /usr/local/fsai/
-  - source: statsETL
-    destination: /usr/local/fsai/
+  - source: ./bin
+    destination: /usr/local/fsai/bin
+  - source: ./frontend
+    destination: /usr/local/fsai/frontend
+  - source: ./init
+    destination: /usr/local/fsai/init
+  - source: ./statsETL
+    destination: /usr/local/fsai/statsETL
 permissions:
 hooks:
 
