@@ -8,7 +8,7 @@ import fab
 # deploy code
 
 
-# run 'source init_envvars.sh'
+# resource bash profile
 
 
 # run setup.py (install dependencies)

@@ -40,6 +40,3 @@ else
     echo "Project path already in python path"
 fi
 
-# reload bash profile
-. ${HOME}/.bash_profile
-
