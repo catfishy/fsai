@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-sudo yum update
+sudo yum -y update
 sudo yum install ruby
 sudo yum install wget
 cd /home/ec2-user

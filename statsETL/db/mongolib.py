@@ -5,12 +5,12 @@ import pandas as pd
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# TODO: move config params to different file
+from init.config import get_config
 
-MONGOD_HOST = 'localhost'
-MONGOD_PORT = 27017
-NBA_DB = "nba_db"
-
+with get_config() as CONFIG:
+    MONGOD_HOST = CONFIG['MONGOD_HOST']
+    MONGOD_PORT = CONFIG['MONGOD_PORT']
+    NBA_DB = CONFIG['NBA_DB']
 
 class MongoConn:
 
@@ -75,14 +75,6 @@ class MongoConn:
         else:
             return results
 
-    def createIndex(self, coll, index_args):
-        '''
-        example index args (for compound index):
-        index_args = [("date", DESCENDING), ("author", ASCENDING)]
-        '''
-        index = coll.create_index(index_args)
-        return index
-
     def ensureIndex(self, coll, index_args, unique=False, sparse=False):
         index = coll.create_index(index_args, unique=unique, sparse=sparse)
         return index
@@ -93,50 +85,15 @@ class MongoConn:
         doc_ids = coll.insert(docs)
         return doc_ids
 
-    def count(self, coll):
-        return coll.count()
-
     def parallelScan(self, coll, num_cursors=1):
         cursors = coll.parallel_scan(num_cursors)
         return cursors
 
 
-
-
 # get nba db conn
 nba_conn = MongoConn(db=NBA_DB)
 
-# deprecate
-'''
-upcoming_collection = nba_conn.getCollection("upcoming") # for upcoming bets
-advanced_collection = nba_conn.getCollection("advanced")
-onoff_collection = nba_conn.getCollection("onoff")
-two_man_collection = nba_conn.getCollection("two_man")
-espn_stat_collection = nba_conn.getCollection("espnstats") # for espn team stats
-espn_player_stat_collection = nba_conn.getCollection("espnplayerstats")
-game_collection = nba_conn.getCollection("games")
-player_collection = nba_conn.getCollection("players")
-player_game_collection = nba_conn.getCollection("player_games")
-team_game_collection = nba_conn.getCollection("team_games")
-
-nba_conn.ensureIndex(player_collection, [("url", 1)])
-nba_conn.ensureIndex(player_collection, [("nba_id", 1)])
-nba_conn.ensureIndex(team_game_collection, [("team_id", 1)])
-nba_conn.ensureIndex(team_game_collection, [("game_id", 1)])
-nba_conn.ensureIndex(player_game_collection, [("player_id", 1)])
-nba_conn.ensureIndex(player_game_collection, [("game_id", 1)])
-nba_conn.ensureIndex(game_collection, [('url',1)])
-nba_conn.ensureIndex(team_game_collection, [("team_id", 1),("game_id", 1)], unique=True)
-nba_conn.ensureIndex(player_game_collection, [("player_id", 1),("game_id", 1)], unique=True)
-nba_conn.ensureIndex(espn_stat_collection, [('time', 1)], unique=True)
-nba_conn.ensureIndex(espn_player_stat_collection, [("player_id", 1),('time', 1)], unique=True)
-nba_conn.ensureIndex(advanced_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
-nba_conn.ensureIndex(onoff_collection, [("player_id", 1),('time', 1),('team_id', 1)], unique=True)
-nba_conn.ensureIndex(two_man_collection, [("player_one", 1),("player_two", 1),('time', 1),('team_id', 1)], unique=True, sparse=True)
-
-'''
-
-# current
+# raw stats
 nba_teams_collection = nba_conn.getCollection("nba_teams")
 shot_chart_collection = nba_conn.getCollection("shot_chart")
 depth_collection = nba_conn.getCollection("depthchart")
@@ -146,13 +103,17 @@ rebound_collection = nba_conn.getCollection("rebound")
 pass_collection = nba_conn.getCollection("pass")
 nba_games_collection = nba_conn.getCollection("nba_games")
 nba_players_collection = nba_conn.getCollection("nba_players")
+
 # team stats vectors
 nba_season_averages_collection = nba_conn.getCollection("nba_season_averages")
 nba_team_vectors_collection = nba_conn.getCollection("nba_team_vectors")
+
 # player stats vectors
 nba_player_vectors_collection = nba_conn.getCollection("nba_player_vectors")
 nba_against_vectors_collection = nba_conn.getCollection("nba_against_vectors")
 nba_split_vectors_collection = nba_conn.getCollection("nba_split_vectors")
+
+# vector outputs
 nba_player_outputs_collection = nba_conn.getCollection("nba_player_outputs")
 nba_team_outputs_collection = nba_conn.getCollection("nba_team_outputs")
 

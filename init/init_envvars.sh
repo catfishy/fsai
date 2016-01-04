@@ -26,7 +26,7 @@ mv ${HOME}/.bash_profile_cleaned ${HOME}/.bash_profile
 echo "Setting project path"
 echo $CMD\'$PROJECTPTH\' >> ${HOME}/.bash_profile
 
-if [ "${PYTHONPATH/$PROJECTPTH}" = "$PYTHONPATH" ] ; then
+if [ "${PYTHONPATH/$PROJECTPTH}" == "$PYTHONPATH" ] ; then
     CMD='export PYTHONPATH=${PYTHONPATH}:'
     CMD=$CMD$PROJECTPTH
     if grep -Fxq "$CMD" ${HOME}/.bash_profile
@@ -42,4 +42,4 @@ fi
 
 # reload bash profile
 . ${HOME}/.bash_profile
-exit 0
+

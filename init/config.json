@@ -1,0 +1,6 @@
+{
+	"USER": "ec2-user",
+	"MONGOD_HOST": "localhost",
+	"MONGOD_PORT": 27017,
+	"NBA_DB": "nba_db"
+}

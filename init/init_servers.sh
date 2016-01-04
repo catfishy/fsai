@@ -36,6 +36,7 @@ fi
 # if in frontend, start django server
 if [ "$INITENV" == 'FRONTEND']
 then
+    nohup python ${PROJECTPTH}'frontend/manage.py' runserver
 fi
 
 # If in dev,
