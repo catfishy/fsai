@@ -1,28 +1,5 @@
 #!/bin/bash 
 
-USERTYPE=$(whoami)
-if [ "$USERTYPE" != "root" ]
-then
-    echo "Run as root"
-    exit 1
-fi
-
-# Add mongodb functions to path
-# Assuming mongo executables at location below
-PTH='/Applications/mongodb-osx-x86_64-2.6.7/bin'
-CMD='export PATH=${PATH}:'
-CMD=$CMD$PTH
-if grep -Fxq "$CMD" ${HOME}/.bash_profile
-then
-    echo "mongo path export found"
-else
-    echo "mongo path export not found"
-    echo $CMD >> ${HOME}/.bash_profile
-fi
-
-# reload bash profile
-source ${HOME}/.bash_profile
-
 # if in compute,
 # start mongodb (db=/var/lib/mongo, logpath=/var/log/mongodb.log, port 27017), then load most recent dump from s3
 # start redis-server (conf=$PROJECTPTH'/init/redis.conf'), then load most recent dump from s3
@@ -36,6 +13,7 @@ fi
 # if in frontend, start django server
 if [ "$INITENV" == 'FRONTEND']
 then
+    sudo service nginx start
     nohup python ${PROJECTPTH}'frontend/manage.py' runserver
 fi
 
@@ -43,6 +21,21 @@ fi
 # start local mongo + redis (load most recent dumps from s3)
 if [ "$INITENV" == 'DEV' ]
 then
+    # Add mongodb functions to path
+    # Assuming mongo executables at location below
+    PTH='/Applications/mongodb-osx-x86_64-2.6.7/bin'
+    CMD='export PATH=${PATH}:'
+    CMD=$CMD$PTH
+    if grep -Fxq "$CMD" ${HOME}/.bash_profile
+    then
+        echo "mongo path export found"
+    else
+        echo "mongo path export not found"
+        echo $CMD >> ${HOME}/.bash_profile
+    fi
+    # reload bash profile
+    source ${HOME}/.bash_profile
+
     # check if already run mongod
     PRIORMONGOD=$(pgrep mongod)
     if [ "$PRIORMONGOD" == "" ]

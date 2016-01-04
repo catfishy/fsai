@@ -4,6 +4,7 @@ Make sure all necessary packages are installed
 import os
 from subprocess import check_call, CalledProcessError
 
+YUM_PACKAGES = ['nginx']
 PIP_PACKAGES = ['simplejson',
                 'beautifulsoup4==4.3.2',
                 'requests==2.5.1',
@@ -12,25 +13,40 @@ PIP_PACKAGES = ['simplejson',
                 'theano==0.6.0',
                 'Pillow==2.7.0',
                 'celery==3.1.19',
-                'kombu==3.0.30']
+                'kombu==3.0.30',
+                'boto',
+                'django==1.9.1',
+                'dj-database-url==0.3.0',
+                'django-extensions==1.6.1',
+                'djangorestframework==3.3.2',
+                'django-compressor==1.6',
+                'drf-nested-routers==0.11.1',
+                'redis==2.10.5']
+SCIPY_PACKAGES = ['numpy',
+                  'scipy',
+                  'matplotlib==1.5.0',
+                  'pandas',
+                  'scikit-learn']
+
 
 def make_str(cmd_list):
     return ' '.join(cmd_list)
 
 def install_scipy(initenv):
-    '''
-    sudo /bin/dd if=/dev/zero of=/var/swap.1 bs=1M count=1024
-    sudo /sbin/mkswap /var/swap.1
-    sudo /sbin/swapon /var/swap.1
-    sudo yum -y install gcc-c++ python27-devel atlas-sse3-devel lapack-devel
-    sudo pip install numpy
-    sudo pip install scipy
-    sudo pip install matplotlib
-    sudo pip install pandas
-    sudo pip install scikit-learn
-    sudo swapoff /var/swap.1
-    sudo rm /var/swap.1
-    '''
+    commands = []
+    if initenv in ['COMPUTE', 'FRONTEND']:
+        commands.append(['sudo','/bin/dd','if=/dev/zero','of=/var/swap.1','bs=1M','count=1024'])
+        commands.append(['sudo','/sbin/mkswap','/var/swap.1'])
+        commands.append(['sudo','/sbin/swapon','/var/swap.1'])
+        commands.append(['sudo','yum','-y','install','gcc-c++','python27-devel','atlas-sse3-devel','lapack-devel','libpng-devel','freetype-devel'])
+        install_pip_pkgs(SCIPY_PACKAGES,mode=None)
+        commands.append(['sudo','swapoff','/var/swap.1'])
+        commands.append(['sudo','rm','/var/swap.1'])
+    elif initenv == 'DEV':
+        commands.append(['brew','install','gcc-c++','python27-devel','atlas-sse3-devel','lapack-devel','libpng-devel','freetype-devel'])
+        install_pip_pkgs(SCIPY_PACKAGES,mode=None)
+    for cmd in commands:
+        check_call(cmd)
 
 
 def install_redis(initenv):
@@ -39,7 +55,7 @@ def install_redis(initenv):
         redis_install_script = ['%s/init/install_redis_amazon_linux.sh' % proj_path]
         check_call(redis_install_script)
     elif initenv == 'DEV':
-        cmd = ['brew', 'install', 'redis=3.0.5']
+        cmd = ['sudo', 'brew', 'install', 'redis=3.0.5']
         check_call(cmd)
     pass
 
@@ -52,7 +68,7 @@ def install_mongo(initenv):
         cmd = ['sudo', 'yum', 'install', '-y', 'mongodb-org'] # requires manually created repo file /etc/yum.repos.d/mongodb-org-3.2.repo
         check_call(cmd)
     elif initenv == 'DEV':
-        cmd = ['brew', 'install', 'mongodb']
+        cmd = ['sudo', 'brew', 'install', 'mongodb']
         check_call(cmd)
     pass
 
@@ -67,10 +83,13 @@ def install_pip_pkgs(pip_pkgs, mode=None):
         except CalledProcessError:
             print "CalledProcessError: PIP Command %s returned non-zero exit status" % make_str(pip_cmd)
 
-if __name__ == "__main__":
-    # run as sudo
+def installAll():
     initenv = os.environ['INITENV']
-    # check INITENV
-    # if compute/frontend, install yum/pip
-    # if dev, install pip/brew
+    install_mongo(initenv)
+    install_redis(initenv)
+    install_scipy(initenv)
+    install_pip_pkgs(PIP_PACKAGES, mode=None)
+
+if __name__ == "__main__":
+    installAll()
 

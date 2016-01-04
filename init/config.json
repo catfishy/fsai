@@ -2,5 +2,6 @@
 	"USER": "ec2-user",
 	"MONGOD_HOST": "localhost",
 	"MONGOD_PORT": 27017,
-	"NBA_DB": "nba_db"
+	"NBA_DB": "nba_db",
+	"MASTER_KEY": "~/.ssh/fsai_master.pem"
 }

@@ -7,10 +7,10 @@ from bson.objectid import ObjectId
 
 from init.config import get_config
 
-with get_config() as CONFIG:
-    MONGOD_HOST = CONFIG['MONGOD_HOST']
-    MONGOD_PORT = CONFIG['MONGOD_PORT']
-    NBA_DB = CONFIG['NBA_DB']
+CONFIG = get_config()
+MONGOD_HOST = CONFIG['MONGOD_HOST']
+MONGOD_PORT = CONFIG['MONGOD_PORT']
+NBA_DB = CONFIG['NBA_DB']
 
 class MongoConn:
 
