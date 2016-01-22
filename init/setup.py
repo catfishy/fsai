@@ -39,7 +39,6 @@ APACHE_PACKAGES = ['python27-devel',
                    'httpd-devel',
                    'python27-imaging',
                    'mysql',
-                   'mysqld',
                    'boost',
                    'boost-devel']
 
@@ -57,8 +56,17 @@ def install_apache(initenv):
         proj_path = os.environ['PROJECTPTH']
         mod_wsgi_install_script = ['sudo','%s/init/install_mod_wsgi_amazon_linux.sh' % proj_path]
         check_call(mod_wsgi_install_script)
+        # move config file
         cmd = ['sudo', 'cp', '%s/init/httpd.conf' % proj_path, '/etc/httpd/conf/httpd.conf']
         check_call(cmd)
+        # fix permissions
+        cmds = []
+        cmds.append(['sudo','usermod','-a','-G','ec2-user','apache'])
+        cmds.append(['chmod','710','/home/ec2-user'])
+        cmds.append(['sudo','chown',':apache',proj_path])
+        cmds.append(['sudo','chown','-R','root:apache','/var/log/httpd'])
+        cmds.append(['sudo','chmod','-R','755','/var/log/httpd'])
+        run_commands(cmds)
 
 def install_scipy(initenv):
     PREREQS = ['gcc-c++','python27-devel','atlas-sse3-devel','lapack-devel','libpng-devel','freetype-devel']

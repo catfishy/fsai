@@ -95,7 +95,7 @@ def loadDumpData():
     pass
 
 if __name__ == "__main__":
-    commitId = '8f2a4fcf4cd47c0e8afd0dc45bf0b4d2479f1081'
+    commitId = '1072b127aaba680c0f76aefc92dfe6ac1d8ec754'
 
     # # start codedeploy service on target servers
     # startDeployService()
