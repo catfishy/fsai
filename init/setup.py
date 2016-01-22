@@ -50,23 +50,15 @@ def run_commands(cmds):
 def make_str(cmd_list):
     return ' '.join(cmd_list)
 
-def install_django(initenv):
-    '''
-    If frontend, LOAD CONF FILE IN CORRECT LOCATION (with apache configs)
-    '''
-    install_pip_pkgs(DJANGO_PACKAGES)
-    if initenv == 'FRONTEND':
-        pass
-
 def install_apache(initenv):
     if initenv == 'FRONTEND':
         install_yum_pkgs(APACHE_PACKAGES)
         # install mod_wsgi
         proj_path = os.environ['PROJECTPTH']
-        mod_wsgi_install_script = ['%s/init/install_mod_wsgi_amazon_linux.sh' % proj_path]
+        mod_wsgi_install_script = ['sudo','%s/init/install_mod_wsgi_amazon_linux.sh' % proj_path]
         check_call(mod_wsgi_install_script)
-        # modify httpd conf
-        pass
+        cmd = ['sudo', 'cp', '%s/init/httpd.conf' % proj_path, '/etc/httpd/conf/httpd.conf']
+        check_call(cmd)
 
 def install_scipy(initenv):
     PREREQS = ['gcc-c++','python27-devel','atlas-sse3-devel','lapack-devel','libpng-devel','freetype-devel']
@@ -106,7 +98,7 @@ def install_mongo(initenv):
         # install
         install_yum_pkgs(['mongodb-org']) # requires manually created repo file /etc/yum.repos.d/mongodb-org-3.2.repo
         # copy conf
-        cmd = ['sudo', 'cp' '%s/init/mongod.conf' % proj_path, '/etc/mongod.conf']
+        cmd = ['sudo', 'cp', '%s/init/mongod.conf' % proj_path, '/etc/mongod.conf']
         check_call(cmd)
     elif initenv == 'DEV':
         cmd = ['sudo', 'brew', 'install', 'mongodb=3.2.0']
@@ -132,7 +124,7 @@ def install_pip_pkgs(pip_pkgs, mode=None):
         except CalledProcessError:
             print "CalledProcessError: PIP Command %s returned non-zero exit status" % make_str(pip_cmd)
 
-def update():
+def update(initenv):
     if initenv in ['COMPUTE','FRONTEND']:
         cmd = ['sudo','yum','-y','update']
         check_call(cmd)
@@ -148,10 +140,10 @@ def installAll():
     initenv = os.environ['INITENV']
     update(initenv)
     install_apache(initenv)
-    install_django(initenv)
     install_redis(initenv)
     install_mongo(initenv)
     install_scipy(initenv)
+    install_pip_pkgs(DJANGO_PACKAGES, mode=None)
     install_pip_pkgs(PIP_PACKAGES, mode=None)
 
 if __name__ == "__main__":
