@@ -7,19 +7,11 @@ from bson.objectid import ObjectId
 
 from init.config import get_config
 
-CONFIG = get_config()
-MONGOD_HOST = CONFIG['MONGOD_HOST']
-MONGOD_PORT = CONFIG['MONGOD_PORT']
-NBA_DB = CONFIG['NBA_DB']
 
 class MongoConn:
 
     def __init__(self, db=None):
-        if not db:
-            raise Exception("Must specify DB to connect to")
-        # create mongo client
-        self.client = MongoClient(MONGOD_HOST, MONGOD_PORT)
-        self.db = self.client[db]
+        raise Exception("USE CHILD CLASS")
 
     def getCollection(self, coll_name):
         return self.db[coll_name]
@@ -89,9 +81,22 @@ class MongoConn:
         cursors = coll.parallel_scan(num_cursors)
         return cursors
 
+class NBAMongoConn(MongoConn):
+
+    def __init__(self):
+        # create mongo client
+        config = get_config()
+        MONGOD_HOST = config['MONGOD_HOST']
+        MONGOD_PORT = config['MONGOD_PORT']
+        NBA_USER = config["MONGO_NBA_USER"]
+        NBA_PW = config["MONGO_NBA_PW"]
+        NBA_DB = config["MONGO_NBA_DB"]
+        uri = "mongodb://%s:%s@%s:%s/%s?authMechanism=SCRAM-SHA-1" % (NBA_USER, NBA_PW, MONGOD_HOST, MONGOD_PORT, NBA_DB)
+        self.client = MongoClient(uri)
+        self.db = self.client[NBA_DB]
 
 # get nba db conn
-nba_conn = MongoConn(db=NBA_DB)
+nba_conn = NBAMongoConn()
 
 # raw stats
 nba_teams_collection = nba_conn.getCollection("nba_teams")
@@ -139,21 +144,5 @@ nba_conn.ensureIndex(nba_split_vectors_collection, [("date", 1), ("player_id", 1
 nba_conn.ensureIndex(nba_stat_ranges_collection, [("date", 1),("vector_type", 1)], unique=True)
 nba_conn.ensureIndex(nba_player_outputs_collection, [("game_id", 1),("player_id", 1), ("window", 1)], unique=True)
 nba_conn.ensureIndex(nba_team_outputs_collection, [("game_id", 1),("team_id", 1), ("window", 1)], unique=True)
-
-def getGameData(game_id):
-    row = espn_games_collection.find_one({"_id": game_id})
-    if not row:
-        print "Could not find game %s" % game_id
-        return
-    data = {}
-    for k,v in row.iteritems():
-        try:
-            loaded = json.loads(v)
-            parsed = pd.read_json(v)
-        except:
-            parsed = v
-        data[k] = parsed
-    return data
-
 
 

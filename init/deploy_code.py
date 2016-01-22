@@ -1,5 +1,7 @@
+import time
+
 import boto3
-import fab
+#import fab
 
 def runCommandsOnServer(server, commands):
     pass
@@ -19,15 +21,18 @@ def startDeployService():
     for server in getServerList():
         runCommandsOnServer(server, commands)
 
+def getDeployStatus(client, depId):
+    return client.get_deployment(deploymentId=depId)['deploymentInfo']['status']
+
 def deployCommit(commitId):
     '''
     Deploy the commit to frontend/compute servers
     '''
     client = boto3.client('codedeploy')
-    frontend_depgrp = client.get_deployment_group(applicationName='CodeDeployFSAI-App', deploymentGroupName='frontend')
     revision = {'revisionType': 'GitHub',
                 'gitHubLocation': {'repository': 'catfishy/fsai',
                                    'commitId': commitId}}
+    # deploy to frontend
     frontend_response = client.create_deployment(applicationName='CodeDeployFSAI-App',
                                                  deploymentGroupName='frontend',
                                                  revision=revision,
@@ -35,6 +40,16 @@ def deployCommit(commitId):
                                                  description='',
                                                  ignoreApplicationStopFailures=True)
     frontend_depId = frontend_response['deploymentId']
+    frontend_depStatus = getDeployStatus(client, frontend_depId)
+    while frontend_depStatus != 'Succeeded':
+        time.sleep(3)
+        frontend_depStatus = getDeployStatus(client, frontend_depId)
+        if frontend_depStatus == 'Failed':
+            raise Exception("Deployment %s Failed" % frontend_depId)
+    
+    # deploy to compute
+    pass
+
     return frontend_depId
 
 def sourceBashProfile():
@@ -55,17 +70,32 @@ def installDependencies():
     for server in getServerList():
         runCommandsOnServer(server, commands)
 
-def startServers():
+def startServices():
     '''
-    run init/init_servers.sh on servers
+    run init/init_services.sh on servers
     '''
     commands = []
-    commands.append(['${PROJECTPTH}/init/init_servers.sh'])
+    commands.append(['${PROJECTPTH}/init/init_services.sh'])
     for server in getServerList():
         runCommandsOnServer(server, commands)
 
+def stopServices():
+    commands = []
+    commands.append(['${PROJECTPTH}/init/stop_services.sh'])
+    for server in getServerList():
+        runCommandsOnServer(server, commands)
+
+def loadDumpData():
+    '''
+    load dump data on compute server (after services have started)
+    '''
+    # create mongo admin user
+    # create mongo backup user
+    # restore latest mongo dump
+    pass
+
 if __name__ == "__main__":
-    commitId = ''
+    commitId = '6bd5895b61b306a06f52280cd800b4d2108792ae'
 
     # # start codedeploy service on target servers
     # startDeployService()
@@ -77,9 +107,19 @@ if __name__ == "__main__":
     # # re-source bash profile on each server
     # sourceBashProfile()
 
+    # OPTION: STOP AND INSTALL 
+
+    # # Stop services on servers
+    # stopServices()
+
     # # run setup.py (install dependencies) on each server
-    # installAll()
+    # installDependencies()
 
     # # start services on servers
-    # startServers()
+    # startServices()
+
+    # OPTION: LOAD RECENT DUMP OF DATA
+
+    # # load data
+    # loadDumpData()
 

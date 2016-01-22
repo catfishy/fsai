@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-# dev or production
+# Dev or Production?
 if [ "$DEPLOYMENT_GROUP_NAME" == "frontend" ]
 then
     INITENV='FRONTEND'
@@ -26,6 +26,7 @@ mv ${HOME}/.bash_profile_cleaned ${HOME}/.bash_profile
 echo "Setting project path"
 echo $CMD\'$PROJECTPTH\' >> ${HOME}/.bash_profile
 
+# Add project path to python path
 if [ "${PYTHONPATH/$PROJECTPTH}" == "$PYTHONPATH" ] ; then
     CMD='export PYTHONPATH=${PYTHONPATH}:'
     CMD=$CMD$PROJECTPTH

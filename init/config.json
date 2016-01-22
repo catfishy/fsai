@@ -1,7 +1,15 @@
 {
 	"USER": "ec2-user",
+	"AWS_EMAIL": "andyhorng1@gmail.com",
+	"S3_MONGO_BACKUP_BUCKET": "fsai-mongo-backup",
 	"MONGOD_HOST": "localhost",
 	"MONGOD_PORT": 27017,
-	"NBA_DB": "nba_db",
-	"MASTER_KEY": "~/.ssh/fsai_master.pem"
+	"MONGO_ADMIN_USER": "admin",
+	"MONGO_ADMIN_PW": "mongo_password",
+	"MONGO_ADMIN_DB": "admin",
+	"MONGO_BACKUP_USER": "backup_user",
+	"MONGO_BACKUP_PW": "backup_password",
+	"MONGO_NBA_USER": "nba_user",
+	"MONGO_NBA_PW": "nba_password",
+	"MONGO_NBA_DB" : "nba_db"
 }

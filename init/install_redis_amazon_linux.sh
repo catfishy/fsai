@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Install Linux updates, set time zones, followed by GCC and Make
-sudo yum -y update
 sudo ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
 sudo yum -y install gcc make
  
