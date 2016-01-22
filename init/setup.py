@@ -30,7 +30,7 @@ SCIPY_PACKAGES = ['numpy',
 APACHE_PACKAGES = ['python27-devel',
                    'gcc',
                    'gcc-c++',
-                   'subversion'
+                   'subversion',
                    'git',
                    'httpd',
                    'make',
