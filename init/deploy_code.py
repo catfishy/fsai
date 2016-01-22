@@ -106,8 +106,7 @@ if __name__ == "__main__":
     if commitId is None:
         raise Exception("Specify a commit to deploy: -c <commit ID>")
 
-    print "DEPLOYING COMMIT: %s" % commidId
-
+    print "DEPLOYING COMMIT: %s" % commitId
 
     # # start codedeploy service on target servers
     # startDeployService()
