@@ -1,5 +1,7 @@
 #!/bin/bash 
 
+PROJECTPTH='/usr/local/fsai'
+
 # Dev or Production?
 if [ "$DEPLOYMENT_GROUP_NAME" == "frontend" ]
 then
@@ -20,7 +22,6 @@ echo $CMD\'$INITENV\' >> ${HOME}/.bash_profile
 
 # Add project path
 CMD='export PROJECTPTH='
-PROJECTPTH='/usr/local/fsai'
 grep -v "$CMD" ${HOME}/.bash_profile > ${HOME}/.bash_profile_cleaned
 mv ${HOME}/.bash_profile_cleaned ${HOME}/.bash_profile
 echo "Setting project path"
