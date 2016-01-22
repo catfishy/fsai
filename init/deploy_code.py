@@ -1,4 +1,5 @@
 import time
+from optparse import OptionParser
 
 import boto3
 #import fab
@@ -95,7 +96,15 @@ def loadDumpData():
     pass
 
 if __name__ == "__main__":
-    commitId = 'f695736bb2bb1fa017c55c76e8b657aefb62aedd'
+    parser = OptionParser()
+    parser.add_option("-c", "--commit", dest="commitid", default=None,
+                      help="Commit ID to deploy")
+
+    (options, args) = parser.parse_args()
+
+    commitId = options.commitid
+    if commitId is None:
+        raise Exception("Specify a commit to deploy: -c <commit ID>")
 
     # # start codedeploy service on target servers
     # startDeployService()

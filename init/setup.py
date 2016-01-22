@@ -18,6 +18,7 @@ PIP_PACKAGES = ['simplejson==3.8.0',
                 'fabric==1.4.0']
 DJANGO_PACKAGES = ['django==1.9.1',
                    'dj-database-url==0.3.0',
+                   'dj-static==0.0.6',
                    'django-extensions==1.6.1',
                    'djangorestframework==3.3.2',
                    'django-compressor==1.6',
